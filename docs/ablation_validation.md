@@ -98,3 +98,65 @@ Probe 配置：
 3. 调整 BPS：降低 oldest bonus 或改成 age-aware score，避免 burst 下长 prompt 牵引过强。
 4. 增加 PBC observability：mode switch rate、budget variance、pressure overshoot、bridge queue p90/p99。
 5. 若 5-seed 仍显示 `kas >= phase`，则论文方法论应把 PBC 从核心贡献降级为系统稳定性机制，或重新设计统一 PBC。
+
+## 2-Seed Ablation Probe
+
+Probe 配置：
+
+- 1p1d
+- LLaMA2-7B
+- `NUM_PROMPTS=48`
+- `SEEDS="0 1"`
+- `RATES="0 4"`
+- `POLICIES="fcfs bps kas bps_kas phase"`
+- `gpu_memory_utilization=0.38`
+- SLO：TTFT 10s，TPOT 1s
+
+结果目录：
+
+- `/root/data/phase_scheduler_results/hetero_1p1d_ablation2_20260526_212556`
+
+注意：这仍然只是 2-seed probe，不能替代最终 5-seed/多规模实验；但它已经能检验 single-seed 观察是否完全偶然。
+
+### 聚合结果
+
+| Rate | Policy | Goodput req/s | SLO submitted | TTFT p90 | TTFT p99 | TPOT p90 | TPOT p99 | Output tok/s |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| 0 | fcfs | 1.481 | 0.958 | 7.299 | 9.298 | 0.148 | 0.164 | 368.0 |
+| 0 | bps | 1.439 | 0.958 | 6.403 | 11.354 | 0.148 | 0.189 | 354.7 |
+| 0 | kas | 1.579 | 0.979 | 6.825 | 8.935 | 0.126 | 0.143 | 383.8 |
+| 0 | bps_kas | 1.568 | 0.958 | 6.087 | 12.509 | 0.127 | 0.171 | 386.5 |
+| 0 | phase | 1.499 | 0.979 | 7.137 | 8.170 | 0.113 | 0.152 | 366.6 |
+| 4 | fcfs | 1.634 | 1.000 | 0.100 | 2.203 | 0.112 | 0.153 | 388.7 |
+| 4 | bps | 1.631 | 1.000 | 0.066 | 1.979 | 0.113 | 0.154 | 388.2 |
+| 4 | kas | 1.716 | 1.000 | 0.063 | 0.192 | 0.066 | 0.085 | 408.0 |
+| 4 | bps_kas | 1.724 | 1.000 | 0.060 | 0.188 | 0.067 | 0.087 | 409.2 |
+| 4 | phase | 1.703 | 1.000 | 0.059 | 0.240 | 0.068 | 0.086 | 404.4 |
+
+### Paired 相对 FCFS
+
+| Rate | Policy | Goodput ratio | SLO delta | TTFT p99 delta | TPOT p90 ratio | TPOT p99 ratio | Output tok/s ratio |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 0 | bps | 0.965 | 0.000 | +2.056 | 0.999 | 1.160 | 0.966 |
+| 0 | kas | 1.067 | +0.0208 | -0.363 | 0.854 | 0.871 | 1.043 |
+| 0 | bps_kas | 1.052 | 0.000 | +3.211 | 0.856 | 1.051 | 1.053 |
+| 0 | phase | 1.018 | +0.0208 | -1.128 | 0.770 | 0.926 | 0.995 |
+| 4 | bps | 0.999 | 0.000 | -0.223 | 1.007 | 1.006 | 0.999 |
+| 4 | kas | 1.050 | 0.000 | -2.010 | 0.601 | 0.556 | 1.050 |
+| 4 | bps_kas | 1.053 | 0.000 | -2.014 | 0.609 | 0.573 | 1.053 |
+| 4 | phase | 1.040 | 0.000 | -1.963 | 0.616 | 0.564 | 1.040 |
+
+### 2-Seed 观察
+
+1. `kas` 的贡献进一步坐实。rate0 下 goodput 平均提升 `6.7%`，SLO submitted 提升 `2.08 pp`，TPOT p99 降低约 `12.9%`；rate4 下 goodput 提升 `5.0%`，TPOT p99 降低约 `44.4%`，TTFT p99 降低约 `2.01s`。
+2. `phase` 不是当前最强组合。它在 rate0 下有最好的 TTFT p99 和 TPOT p90，但 goodput/output tok/s 低于 `kas`；rate4 下也没有超过 `kas` 或 `bps_kas`。
+3. `bps` 单独仍然不稳定。rate0 下 TPOT p99 和 TTFT p99 都变差，rate4 下基本只是略微改善 TTFT tail。
+4. `bps_kas` 在 rate4 接近最强，但 rate0 下 TTFT p99/TPOT p99 不稳定，说明 BPS 与 KAS 的组合还没有调好。
+
+### 决策
+
+当前不应继续把 PBC 作为“已验证核心贡献”来扩写。下一步更合理的是：
+
+1. 先拆 KAS 内部 ablation：`kas_no_evict`、`kas_no_nexttoken_reserve`、`kas_no_resident_preference`。
+2. 重新调 BPS，优先降低 burst 下对 TTFT p99 的伤害。
+3. 如果后续 5-seed 仍是 `kas >= phase`，方法论文档需要改成 KAS-first：PBC 作为稳定性/预算接口，而不是主收益来源。
