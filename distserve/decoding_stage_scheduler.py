@@ -323,6 +323,7 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
             "PHASESERVE_PBC_SWAP_TARGET",
             str(max(self.max_swap_ins_per_iter * 4, 1))
         ))
+        self.append_block_margin = int(os.environ.get("PHASESERVE_DECODE_APPEND_BLOCK_MARGIN", "0"))
         self.current_budget = None
 
         self.consecutive_skips = {}
@@ -409,7 +410,10 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
     def _get_append_blocks_needed_safe(self, request: Request) -> int:
         if self.block_manager.get_location(request.request_id) != BlockLocation.GPU:
             return 0
-        return max(self.block_manager.get_num_append_blocks_needed(request), 0)
+        append_needed = max(self.block_manager.get_num_append_blocks_needed(request), 0)
+        if request.get_output_len() > 0:
+            append_needed = max(append_needed, self.append_block_margin)
+        return append_needed
 
     def _can_add_to_las_batch(self, batch: BatchedRequests, request: Request, swap_ins_used: int, budget) -> bool:
         if len(batch) >= self.sched_config.max_batch_size:
@@ -435,6 +439,37 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
             return False
         blocks_to_swap_in = self.block_manager.get_allocated_num_blocks(request.request_id)
         return blocks_to_swap_in <= self.block_manager.get_num_avail_gpu_blocks()
+
+    def _evict_resident_requests_for_blocks(
+        self,
+        ready_requests: List[Request],
+        protected_ids: set,
+        min_free_blocks: int,
+    ) -> int:
+        """Swap out low-priority resident requests to make decode progress possible."""
+        evicted = 0
+        if min_free_blocks <= self.block_manager.get_num_avail_gpu_blocks():
+            return evicted
+
+        candidates = [
+            request for request in ready_requests
+            if request.request_id not in protected_ids
+            and not request.is_finished
+            and self.block_manager.get_location(request.request_id) == BlockLocation.GPU
+        ]
+        candidates.sort(key=self._ready_sort_key, reverse=True)
+
+        for request in candidates:
+            blocks = self.block_manager.get_allocated_num_blocks(request.request_id)
+            if blocks > self.block_manager.get_num_avail_cpu_blocks():
+                continue
+            logger.info("KV-aware LAS swap-out triggered")
+            self.block_manager.swap_out_requests([request])
+            evicted += 1
+            self.total_evictions += 1
+            if self.block_manager.get_num_avail_gpu_blocks() >= min_free_blocks:
+                break
+        return evicted
 
     def _requeue_unselected_requests(self, ready_requests: List[Request], selected_ids: set):
         self.waiting_queue = []
@@ -479,9 +514,31 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
         swap_stall_s = 0.0
         resident_selected = 0
         selected_starved = 0
+        eviction_count = 0
         for request in ordered_requests[:scan_limit]:
             was_resident = self._is_resident(request)
-            if self._can_add_to_las_batch(self.batch_queues[self.cur_index], request, swap_ins_used, budget):
+            can_add = self._can_add_to_las_batch(
+                self.batch_queues[self.cur_index], request, swap_ins_used, budget
+            )
+            if not can_add and was_resident:
+                append_needed = self._get_append_blocks_needed_safe(request)
+                selected_append_needed = sum([
+                    self._get_append_blocks_needed_safe(req)
+                    for req in self.batch_queues[self.cur_index].requests
+                    if self._is_resident(req)
+                ])
+                min_free_blocks = append_needed + selected_append_needed
+                protected_ids = set(selected_ids)
+                protected_ids.add(request.request_id)
+                eviction_count += self._evict_resident_requests_for_blocks(
+                    ready_requests,
+                    protected_ids,
+                    min_free_blocks,
+                )
+                can_add = self._can_add_to_las_batch(
+                    self.batch_queues[self.cur_index], request, swap_ins_used, budget
+                )
+            if can_add:
                 if not self._is_resident(request):
                     logger.info("KV-aware LAS swap-in triggered")
                     estimated_bytes = self._estimate_kv_bytes(request)
@@ -522,7 +579,7 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
             "swap_ins": swap_ins_used,
             "swap_in_bytes": swap_in_bytes,
             "iteration_stall_s": swap_stall_s,
-            "eviction_count": 0,
+            "eviction_count": eviction_count,
             "max_consecutive_skips": max(self.consecutive_skips.values(), default=0),
             "scan_limit": scan_limit,
             "sched_time_s": time.perf_counter() - sched_start,
