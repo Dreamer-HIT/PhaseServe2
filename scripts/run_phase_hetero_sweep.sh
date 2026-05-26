@@ -36,4 +36,8 @@ done
   --output-csv "${SWEEP_ROOT}/sweep_summary.csv" \
   --output-md "${SWEEP_ROOT}/sweep_summary.md"
 
+"${PYTHON}" benchmarks/phase_analyze_sweep.py \
+  "${SWEEP_ROOT}" \
+  --output-prefix "${SWEEP_ROOT}/sweep_analysis"
+
 echo "SWEEP_ROOT=${SWEEP_ROOT}"

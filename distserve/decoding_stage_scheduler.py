@@ -411,8 +411,15 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
         if self.block_manager.get_location(request.request_id) != BlockLocation.GPU:
             return 0
         append_needed = max(self.block_manager.get_num_append_blocks_needed(request), 0)
-        if request.get_output_len() > 0:
-            append_needed = max(append_needed, self.append_block_margin)
+        allocated_blocks = self.block_manager.get_allocated_num_blocks(request.request_id)
+        future_len = request.get_input_len() + request.get_output_len() + 1
+        block_size = self.block_manager.cache_config.block_size
+        next_token_blocks = (future_len + block_size - 1) // block_size
+        append_needed = max(
+            append_needed,
+            next_token_blocks - allocated_blocks,
+            self.append_block_margin,
+        )
         return append_needed
 
     def _can_add_to_las_batch(self, batch: BatchedRequests, request: Request, swap_ins_used: int, budget) -> bool:
