@@ -40,13 +40,30 @@ def flatten_summary(path: Path):
         "process_name": metadata.get("process_name"),
         "num_prompts": metadata.get("num_prompts"),
         "seed": metadata.get("seed"),
+        "num_gpus": metadata.get("num_gpus"),
         "submitted": data.get("submitted"),
         "completed": data.get("completed"),
         "failed": data.get("failed"),
+        "goodput": data.get("goodput"),
         "throughput_req_s": data.get("throughput_req_s"),
+        "goodput_req_s": data.get("goodput_req_s"),
         "slo_attainment_completed": data.get("slo_attainment_completed"),
         "slo_attainment_submitted": data.get("slo_attainment_submitted"),
     }
+    throughput = data.get("throughput") or {}
+    for key in [
+        "offered_req_s",
+        "submitted_req_s",
+        "completed_req_s",
+        "goodput_req_s",
+        "per_gpu_completed_req_s",
+        "per_gpu_goodput_req_s",
+        "input_tokens_s",
+        "requested_output_tokens_s",
+        "generated_output_tokens_s",
+        "total_generated_tokens_s",
+    ]:
+        row[f"throughput_{key}"] = throughput.get(key)
     for metric, stat in METRIC_FIELDS:
         row[f"{metric}_{stat}"] = (data.get(metric) or {}).get(stat)
     return row
@@ -59,6 +76,9 @@ def write_markdown(rows, output_path: Path):
         "request_rate",
         "completed",
         "failed",
+        "throughput_completed_req_s",
+        "throughput_goodput_req_s",
+        "throughput_per_gpu_goodput_req_s",
         "slo_attainment_submitted",
         "ttft_s_median",
         "ttft_s_p99",

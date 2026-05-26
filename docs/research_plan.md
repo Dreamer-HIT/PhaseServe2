@@ -4,7 +4,14 @@
 
 ## 目标
 
-PhaseServe 的目标不应只是在 DistServe 上增加两个调度启发式，而是证明：在 phase-disaggregated LLM serving 中，仅靠静态资源切分和 FCFS admission 不足以同时控制 prefill 排队、decode KV 压力和尾延迟；PhaseServe 通过在线、低开销、阶段感知的请求调度，在不改变模型并行配置的前提下提升 SLO attainment、median latency 和 tail latency。
+PhaseServe 的目标不应只是在 DistServe 上增加两个调度启发式，而是证明：在 phase-disaggregated LLM serving 中，仅靠静态资源切分和 FCFS admission 不足以同时控制 prefill 排队、decode KV 压力和尾延迟；PhaseServe 通过在线、低开销、阶段感知的请求调度，在不改变模型并行配置的前提下提升瓶颈指标。
+
+这里的“瓶颈指标”需要由 workload 决定，而不是承诺所有指标同时提升：
+
+- prefill-heavy workload：主要目标是 TTFT median/tail 和 prefill queueing。
+- decode/KV-pressure workload：主要目标是 TPOT P90/P99、decode queueing、swap/迁移压力。
+- mixed workload：主要目标是 SLO goodput 和不同长度 bucket 的公平性。
+- 允许 tradeoff：例如为了降低 TPOT tail，TTFT median 可能轻微上升；论文需要量化 tradeoff，而不是掩盖它。
 
 ## 参考论文口径
 
@@ -75,9 +82,10 @@ WindServe 的 SLO 表：
 必须报告：
 
 - request rate sweep 下的 SLO attainment 曲线。
-- 90% SLO attainment 下的最大 per-GPU rate。
+- 90% SLO attainment 下的最大 per-GPU goodput。
 - 可选：99% SLO attainment 下的最大 per-GPU rate。
 - SLO scale sweep：在固定 rate 下同时缩放 TTFT/TPOT SLO，比较系统能承受的最严格 SLO。
+- request throughput、token throughput 和 SLO goodput 分开报告，避免把“完成得多”和“满足 SLO 得多”混在一起。
 
 ### 3. Mechanism diagnostics
 
@@ -170,4 +178,3 @@ WindServe 的 SLO 表：
 3. 引入 OPT-13B 或 OPT-6.7B 稳定性对照，确认 invalid token guard 不是实验收益来源。
 4. 做 FCFS、PS-Prefill、PS-Decode、Phase 四组 ablation。
 5. 把实验结果整理成一张 CSV/JSON 汇总表，后续直接画图。
-

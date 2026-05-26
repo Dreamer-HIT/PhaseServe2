@@ -32,7 +32,9 @@
 
 建议改成如下更稳、更容易说服 reviewer 的 claim：
 
-> PhaseServe 是一个 scheduler-first 的 prefill-decode disaggregated serving 扩展。它证明了，在完成 prefill/decode 资源解耦之后，剩余关键瓶颈来自两个阶段内部的信息不匹配；通过将调度策略与各阶段可观测信息相匹配，可以在不修改模型 kernel 的情况下改善 TTFT、TPOT 和 SLO goodput。
+> PhaseServe 是一个 scheduler-first 的 prefill-decode disaggregated serving 扩展。它证明了，在完成 prefill/decode 资源解耦之后，剩余关键瓶颈来自两个阶段内部的信息不匹配；通过将调度策略与各阶段可观测信息相匹配，可以在不修改模型 kernel 的情况下改善 workload 的瓶颈指标，例如 TTFT queueing、TPOT tail、SLO goodput 或不同长度 bucket 的公平性。
+
+注意：这个 claim 不要求所有指标同时改善。系统论文更可信的写法是定义各类 workload 的瓶颈指标，并显式报告 tradeoff。例如，decode-pressure workload 中 PhaseServe 的主要目标可以是降低 TPOT P99 和提高 SLO goodput；如果 TTFT median 轻微上升，只要幅度可控且 SLO attainment 更高，这仍然是合理结果。
 
 这个 claim 更适合系统顶会，原因有三点：
 

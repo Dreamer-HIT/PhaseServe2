@@ -279,6 +279,37 @@ def summarize_records(records, args, wall_time_s):
                 "latency_s": summarize([r.get("latency_s") for r in rows]),
             }
     return {
+        "throughput": {
+            "offered_req_s": args.request_rate if args.request_rate not in [float("inf"), 0.0] else None,
+            "submitted_req_s": len(records) / wall_time_s if wall_time_s > 0 else None,
+            "completed_req_s": len(ok) / wall_time_s if wall_time_s > 0 else None,
+            "goodput_req_s": len(slo_completed) / wall_time_s if wall_time_s > 0 else None,
+            "per_gpu_completed_req_s": (
+                len(ok) / wall_time_s / args.num_gpus
+                if wall_time_s > 0 and args.num_gpus > 0 else None
+            ),
+            "per_gpu_goodput_req_s": (
+                len(slo_completed) / wall_time_s / args.num_gpus
+                if wall_time_s > 0 and args.num_gpus > 0 else None
+            ),
+            "input_tokens_s": (
+                sum(r["prompt_len"] for r in ok) / wall_time_s
+                if wall_time_s > 0 else None
+            ),
+            "requested_output_tokens_s": (
+                sum(r["output_len"] for r in ok) / wall_time_s
+                if wall_time_s > 0 else None
+            ),
+            "generated_output_tokens_s": (
+                sum(r.get("num_token_timestamps", 0) for r in ok) / wall_time_s
+                if wall_time_s > 0 else None
+            ),
+            "total_generated_tokens_s": (
+                sum(r["prompt_len"] + r.get("num_token_timestamps", 0) for r in ok) / wall_time_s
+                if wall_time_s > 0 else None
+            ),
+            "num_gpus": args.num_gpus,
+        },
         "metadata": {
             "label": args.label,
             "policy": args.policy,
@@ -296,6 +327,7 @@ def summarize_records(records, args, wall_time_s):
             "max_connections": args.max_connections,
             "timeout_s": args.timeout_s,
             "max_total_tokens": args.max_total_tokens,
+            "num_gpus": args.num_gpus,
             "slo_ttft_s": args.slo_ttft_s,
             "slo_tpot_s": args.slo_tpot_s,
         },
@@ -303,7 +335,9 @@ def summarize_records(records, args, wall_time_s):
         "submitted": len(records),
         "completed": len(ok),
         "failed": len(failed),
+        "goodput": len(slo_completed),
         "throughput_req_s": len(ok) / wall_time_s if wall_time_s > 0 else None,
+        "goodput_req_s": len(slo_completed) / wall_time_s if wall_time_s > 0 else None,
         "failure_rate": len(failed) / len(records) if records else None,
         "slo_attainment_completed": len(slo_completed) / len(ok) if ok else None,
         "slo_attainment_submitted": len(slo_completed) / len(records) if records else None,
@@ -335,6 +369,7 @@ def main():
     parser.add_argument("--max-connections", type=int, default=16)
     parser.add_argument("--timeout-s", type=float, default=3600)
     parser.add_argument("--max-total-tokens", type=int, default=2048, help="0 disables the check")
+    parser.add_argument("--num-gpus", type=int, default=1, help="Used for per-GPU throughput/goodput")
     parser.add_argument("--output", required=True)
     parser.add_argument("--raw-output")
     parser.add_argument("--summary-output")
@@ -372,7 +407,18 @@ def main():
 
     print(f"Total time: {end - start:.2f} s")
     print(f"Completed: {summary['completed']}/{summary['submitted']} requests")
-    print(f"Throughput: {summary['throughput_req_s']:.2f} requests/s")
+    print(
+        "Throughput submitted/completed/goodput: "
+        f"{summary['throughput']['submitted_req_s']:.2f}/"
+        f"{summary['throughput']['completed_req_s']:.2f}/"
+        f"{summary['throughput']['goodput_req_s']:.2f} requests/s"
+    )
+    print(
+        "Token throughput input/generated/total: "
+        f"{summary['throughput']['input_tokens_s']:.2f}/"
+        f"{summary['throughput']['generated_output_tokens_s']:.2f}/"
+        f"{summary['throughput']['total_generated_tokens_s']:.2f} tokens/s"
+    )
     print(
         "TTFT median/p90/p95/p99: "
         f"{summary['ttft_s']['median']}/{summary['ttft_s']['p90']}/"
