@@ -10,11 +10,16 @@ from pathlib import Path
 METRICS = [
     "goodput_req_s",
     "throughput_req_s",
+    "throughput_completed_req_s",
+    "throughput_generated_output_tokens_s",
+    "throughput_total_generated_tokens_s",
     "slo_attainment_submitted",
     "ttft_p50",
+    "ttft_p90",
     "ttft_p95",
     "ttft_p99",
     "tpot_p50",
+    "tpot_p90",
     "tpot_p95",
     "tpot_p99",
     "latency_p99",
@@ -44,6 +49,7 @@ def stderr(values):
 def load_summary(path: Path):
     data = json.loads(path.read_text())
     metadata = data.get("metadata", {})
+    throughput = data.get("throughput") or {}
     phase_components = (data.get("phase_metrics") or {}).get("components") or {}
     decode = phase_components.get("decode") or {}
     context = phase_components.get("context") or {}
@@ -56,11 +62,16 @@ def load_summary(path: Path):
         "failed": data.get("failed"),
         "goodput_req_s": data.get("goodput_req_s"),
         "throughput_req_s": data.get("throughput_req_s"),
+        "throughput_completed_req_s": throughput.get("completed_req_s"),
+        "throughput_generated_output_tokens_s": throughput.get("generated_output_tokens_s"),
+        "throughput_total_generated_tokens_s": throughput.get("total_generated_tokens_s"),
         "slo_attainment_submitted": data.get("slo_attainment_submitted"),
         "ttft_p50": (data.get("ttft_s") or {}).get("p50"),
+        "ttft_p90": (data.get("ttft_s") or {}).get("p90"),
         "ttft_p95": (data.get("ttft_s") or {}).get("p95"),
         "ttft_p99": (data.get("ttft_s") or {}).get("p99"),
         "tpot_p50": (data.get("tpot_s") or {}).get("p50"),
+        "tpot_p90": (data.get("tpot_s") or {}).get("p90"),
         "tpot_p95": (data.get("tpot_s") or {}).get("p95"),
         "tpot_p99": (data.get("tpot_s") or {}).get("p99"),
         "latency_p99": (data.get("latency_s") or {}).get("p99"),
@@ -82,7 +93,7 @@ def collect_rows(inputs):
             paths.append(path)
     rows = []
     for path in sorted(paths):
-        if path.name.startswith(("phase_hetero", "fcfs_hetero")):
+        if path.name.endswith(".summary.json"):
             rows.append(load_summary(path))
     return rows
 
@@ -109,33 +120,39 @@ def grouped_rows(rows):
     return out
 
 
-def paired_delta_rows(rows):
+def paired_delta_rows(rows, baseline_policy):
     by_key = defaultdict(dict)
     for row in rows:
         by_key[(row["rate"], row["seed"])][row["policy"]] = row
     out = []
     for (rate, seed), pair in sorted(by_key.items()):
-        if "phase" not in pair or "fcfs" not in pair:
+        baseline = pair.get(baseline_policy)
+        if baseline is None:
             continue
-        entry = {"rate": rate, "seed": seed}
-        for metric in METRICS:
-            phase = pair["phase"].get(metric)
-            fcfs = pair["fcfs"].get(metric)
-            entry[f"{metric}_delta"] = None if phase is None or fcfs is None else phase - fcfs
-            entry[f"{metric}_ratio"] = (
-                None if phase is None or fcfs in [None, 0] else phase / fcfs
-            )
-        out.append(entry)
+        for policy, target in sorted(pair.items()):
+            if policy == baseline_policy:
+                continue
+            entry = {"rate": rate, "seed": seed, "policy": policy, "baseline": baseline_policy}
+            for metric in METRICS:
+                target_value = target.get(metric)
+                baseline_value = baseline.get(metric)
+                entry[f"{metric}_delta"] = (
+                    None if target_value is None or baseline_value is None else target_value - baseline_value
+                )
+                entry[f"{metric}_ratio"] = (
+                    None if target_value is None or baseline_value in [None, 0] else target_value / baseline_value
+                )
+            out.append(entry)
     return out
 
 
 def summarize_paired(deltas):
     groups = defaultdict(list)
     for row in deltas:
-        groups[row["rate"]].append(row)
+        groups[(row["rate"], row["policy"], row["baseline"])].append(row)
     out = []
-    for rate, group in sorted(groups.items()):
-        entry = {"rate": rate, "n": len(group)}
+    for (rate, policy, baseline), group in sorted(groups.items()):
+        entry = {"rate": rate, "policy": policy, "baseline": baseline, "n": len(group)}
         for metric in METRICS:
             values = [r.get(f"{metric}_delta") for r in group]
             ratios = [r.get(f"{metric}_ratio") for r in group]
@@ -171,19 +188,23 @@ def write_markdown(path: Path, grouped, paired):
         cols = [
             "rate", "policy", "n",
             "goodput_req_s_mean", "slo_attainment_submitted_mean",
-            "ttft_p99_mean", "tpot_p95_mean", "tpot_p99_mean",
+            "throughput_generated_output_tokens_s_mean",
+            "ttft_p50_mean", "ttft_p90_mean", "ttft_p99_mean",
+            "tpot_p50_mean", "tpot_p90_mean", "tpot_p99_mean",
             "goodput_req_s_std", "tpot_p99_std",
         ]
         f.write("| " + " | ".join(cols) + " |\n")
         f.write("|" + "|".join(["---"] * len(cols)) + "|\n")
         for row in grouped:
             f.write("| " + " | ".join(fmt(row.get(c)) for c in cols) + " |\n")
-        f.write("\n## Paired Phase Minus FCFS\n\n")
+        f.write("\n## Paired Policy Minus Baseline\n\n")
         cols = [
-            "rate", "n",
+            "rate", "policy", "baseline", "n",
             "goodput_req_s_delta_mean", "slo_attainment_submitted_delta_mean",
-            "ttft_p99_delta_mean", "tpot_p95_delta_mean", "tpot_p99_delta_mean",
-            "goodput_req_s_ratio_mean", "tpot_p99_ratio_mean",
+            "throughput_generated_output_tokens_s_ratio_mean",
+            "ttft_p90_delta_mean", "ttft_p99_delta_mean",
+            "tpot_p90_delta_mean", "tpot_p99_delta_mean",
+            "goodput_req_s_ratio_mean", "tpot_p90_ratio_mean", "tpot_p99_ratio_mean",
         ]
         f.write("| " + " | ".join(cols) + " |\n")
         f.write("|" + "|".join(["---"] * len(cols)) + "|\n")
@@ -195,11 +216,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("inputs", nargs="+")
     parser.add_argument("--output-prefix", required=True)
+    parser.add_argument("--baseline-policy", default="fcfs")
     args = parser.parse_args()
 
     rows = collect_rows(args.inputs)
     grouped = grouped_rows(rows)
-    deltas = paired_delta_rows(rows)
+    deltas = paired_delta_rows(rows, args.baseline_policy)
     paired = summarize_paired(deltas)
 
     prefix = Path(args.output_prefix)

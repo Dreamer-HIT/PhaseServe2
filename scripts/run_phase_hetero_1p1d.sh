@@ -21,6 +21,7 @@ PORT=${PORT:-8000}
 HOST=${HOST:-127.0.0.1}
 SLO_TTFT_S=${SLO_TTFT_S:-10}
 SLO_TPOT_S=${SLO_TPOT_S:-1}
+POLICIES=${POLICIES:-"phase fcfs"}
 PHASESERVE_PBC_RHO_LOW=${PHASESERVE_PBC_RHO_LOW:-0.20}
 PHASESERVE_PBC_RHO_HIGH=${PHASESERVE_PBC_RHO_HIGH:-0.40}
 PHASESERVE_PBC_DECODE_QUEUE_TARGET=${PHASESERVE_PBC_DECODE_QUEUE_TARGET:-4}
@@ -138,17 +139,68 @@ start_server() {
   local pid_file="${run_dir}/server.pid"
   local context_policy="fcfs"
   local decode_policy="fcfs"
-  if [[ "${policy}" == "phase" ]]; then
-    context_policy="phase"
-    decode_policy="phase"
+  local emit_phase_metrics=0
+  local dynamic_pbc=0
+
+  case "${policy}" in
+    fcfs)
+      context_policy="fcfs"
+      decode_policy="fcfs"
+      ;;
+    bps)
+      context_policy="phase"
+      decode_policy="fcfs"
+      emit_phase_metrics=1
+      ;;
+    kas)
+      context_policy="fcfs"
+      decode_policy="kv-aware-las"
+      emit_phase_metrics=1
+      ;;
+    bps_kas)
+      context_policy="phase"
+      decode_policy="kv-aware-las"
+      emit_phase_metrics=1
+      ;;
+    bps_pbc)
+      context_policy="phase"
+      decode_policy="fcfs"
+      emit_phase_metrics=1
+      dynamic_pbc=1
+      ;;
+    kas_pbc)
+      context_policy="fcfs"
+      decode_policy="kv-aware-las"
+      emit_phase_metrics=1
+      dynamic_pbc=1
+      ;;
+    phase|full)
+      context_policy="phase"
+      decode_policy="phase"
+      emit_phase_metrics=1
+      dynamic_pbc=1
+      ;;
+    *)
+      echo "Unknown policy: ${policy}" >&2
+      return 1
+      ;;
+  esac
+
+  if [[ "${emit_phase_metrics}" == "1" ]]; then
     export PHASESERVE_METRICS_PATH="${run_dir}/phase_metrics.jsonl"
     export PHASESERVE_PBC_RHO_LOW
     export PHASESERVE_PBC_RHO_HIGH
     export PHASESERVE_PBC_DECODE_QUEUE_TARGET
     export PHASESERVE_PBC_SWAP_TARGET
     export PHASESERVE_DECODE_MAX_SWAPINS
+    if [[ "${dynamic_pbc}" == "1" ]]; then
+      unset PHASESERVE_PBC_DISABLE_DYNAMIC || true
+    else
+      export PHASESERVE_PBC_DISABLE_DYNAMIC=1
+    fi
   else
     unset PHASESERVE_METRICS_PATH || true
+    unset PHASESERVE_PBC_DISABLE_DYNAMIC || true
   fi
 
   nohup "${PYTHON}" -m distserve.api_server.distserve_api_server \
@@ -177,7 +229,7 @@ run_policy() {
   cp "${run_dir}/server.pid" "${RESULT_ROOT}/last_server.pid"
 
   local phase_metrics_arg=()
-  if [[ "${policy}" == "phase" ]]; then
+  if [[ -f "${run_dir}/phase_metrics.jsonl" || "${policy}" != "fcfs" ]]; then
     phase_metrics_arg=(--phase-metrics "${run_dir}/phase_metrics.jsonl")
   fi
 
@@ -199,8 +251,9 @@ run_policy() {
 }
 
 make_dataset
-run_policy phase
-run_policy fcfs
+for policy in ${POLICIES}; do
+  run_policy "${policy}"
+done
 stop_server "${RESULT_ROOT}/last_server.pid"
 
 "${PYTHON}" benchmarks/phase_collect_summaries.py \

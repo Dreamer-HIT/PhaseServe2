@@ -59,6 +59,10 @@ class PressureBudgetController:
         self.rho_high = _env_float("PHASESERVE_PBC_RHO_HIGH", 0.75)
         self.smooth_lambda = _env_float("PHASESERVE_PBC_SMOOTH_LAMBDA", 0.8)
         self.aggregation = os.environ.get("PHASESERVE_PBC_AGG", "max")
+        self.disable_dynamic = os.environ.get(
+            "PHASESERVE_PBC_DISABLE_DYNAMIC",
+            "0",
+        ).lower() in {"1", "true", "yes", "on"}
         self.weights = [
             _env_float("PHASESERVE_PBC_W_BRIDGE", 1.0),
             _env_float("PHASESERVE_PBC_W_DECODE", 1.0),
@@ -107,8 +111,32 @@ class PressureBudgetController:
         smoothed = self.smooth_lambda * previous + (1.0 - self.smooth_lambda) * raw
         return int(round(smoothed))
 
+    def _static_budget(self, normalized: Dict[str, float]) -> AdmissionBudget:
+        mode = "STATIC"
+        if mode != self.previous_mode:
+            self.num_mode_switches += 1
+        budget = AdmissionBudget(
+            mode=mode,
+            rho_down=0.0,
+            prefill_token_budget=self.max_prefill_tokens,
+            prefill_block_margin=max(self.min_prefill_block_margin, 0),
+            prefer_small_kv_footprint=False,
+            decode_swap_budget_per_iter=max(self.max_decode_swap_budget, 0),
+            decode_scan_limit=max(self.max_decode_scan, 1) if self.max_decode_scan else 0,
+            allow_protected_oldest=normalized.get("age", 0.0) >= 1.0,
+            pressures=normalized,
+        )
+        self.previous_budget = budget
+        self.previous_mode = mode
+        self.num_updates += 1
+        self.last_budget_delta = 0.0
+        return budget
+
     def update(self, pressures: Dict[str, float]) -> AdmissionBudget:
         normalized = {key: clamp(float(value)) for key, value in pressures.items()}
+        if self.disable_dynamic:
+            return self._static_budget(normalized)
+
         rho_down = self._aggregate(normalized)
         if rho_down >= self.rho_high:
             mode = "BACKPRESSURE"

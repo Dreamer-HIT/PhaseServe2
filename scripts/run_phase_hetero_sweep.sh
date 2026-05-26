@@ -9,6 +9,7 @@ RATES=${RATES:-"0 1 2"}
 NUM_PROMPTS=${NUM_PROMPTS:-48}
 DATASET_SIZE=${DATASET_SIZE:-${NUM_PROMPTS}}
 PROCESS_NAME=${PROCESS_NAME:-poisson}
+POLICIES=${POLICIES:-"phase fcfs"}
 
 mkdir -p "${SWEEP_ROOT}"
 cd "${REPO_DIR}"
@@ -27,6 +28,7 @@ for seed in ${SEEDS}; do
       DATASET_SIZE="${DATASET_SIZE}" \
       REQUEST_RATE="${rate}" \
       PROCESS_NAME="${PROCESS_NAME}" \
+      POLICIES="${POLICIES}" \
       ./scripts/run_phase_hetero_1p1d.sh
   done
 done
