@@ -59,6 +59,69 @@ def summarize(values: List[float]) -> Dict[str, Optional[float]]:
     }
 
 
+def summarize_phase_metrics(path: Optional[str]) -> Dict:
+    if not path:
+        return {}
+    metrics_path = Path(path)
+    if not metrics_path.exists():
+        return {"path": str(metrics_path), "exists": False}
+    records = []
+    with metrics_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    by_component = {}
+    for component in sorted({r.get("component", "unknown") for r in records}):
+        rows = [r for r in records if r.get("component", "unknown") == component]
+        dispatch_rows = [r for r in rows if r.get("event") == "dispatch"]
+        budgets = [r.get("budget", {}) for r in dispatch_rows]
+        pressures = [b.get("pressures", {}) for b in budgets]
+        by_component[component] = {
+            "records": len(rows),
+            "dispatches": len(dispatch_rows),
+            "modes": {
+                mode: sum(1 for b in budgets if b.get("mode") == mode)
+                for mode in sorted({b.get("mode") for b in budgets if b.get("mode")})
+            },
+            "rho_down": summarize([b.get("rho_down") for b in budgets]),
+            "pressure_bridge": summarize([p.get("bridge") for p in pressures]),
+            "pressure_decode": summarize([p.get("decode") for p in pressures]),
+            "pressure_kv": summarize([p.get("kv") for p in pressures]),
+            "pressure_swap": summarize([p.get("swap") for p in pressures]),
+            "selected": summarize([r.get("selected") for r in dispatch_rows]),
+            "sched_time_s": summarize([r.get("sched_time_s") for r in dispatch_rows]),
+        }
+        if component == "context":
+            by_component[component].update({
+                "prefill_token_budget": summarize([b.get("prefill_token_budget") for b in budgets]),
+                "prefill_block_margin": summarize([b.get("prefill_block_margin") for b in budgets]),
+                "forced_oldest": sum(1 for r in dispatch_rows if r.get("forced_oldest")),
+                "selected_prompt_tokens": summarize([r.get("selected_prompt_tokens") for r in dispatch_rows]),
+            })
+        if component == "decode":
+            by_component[component].update({
+                "decode_swap_budget_per_iter": summarize([b.get("decode_swap_budget_per_iter") for b in budgets]),
+                "decode_scan_limit": summarize([b.get("decode_scan_limit") for b in budgets]),
+                "swap_ins": sum(r.get("swap_ins", 0) for r in dispatch_rows),
+                "swap_in_bytes": sum(r.get("swap_in_bytes", 0) for r in dispatch_rows),
+                "iteration_stall_s": summarize([r.get("iteration_stall_s") for r in dispatch_rows]),
+                "resident_admission_ratio": summarize([r.get("resident_admission_ratio") for r in dispatch_rows]),
+                "max_consecutive_skips": summarize([r.get("max_consecutive_skips") for r in dispatch_rows]),
+                "eviction_count": sum(r.get("eviction_count", 0) for r in dispatch_rows),
+            })
+    return {
+        "path": str(metrics_path),
+        "exists": True,
+        "records": len(records),
+        "components": by_component,
+    }
+
+
 def event_map(events):
     out = {}
     for event in events or []:
@@ -330,6 +393,7 @@ def summarize_records(records, args, wall_time_s):
             "num_gpus": args.num_gpus,
             "slo_ttft_s": args.slo_ttft_s,
             "slo_tpot_s": args.slo_tpot_s,
+            "phase_metrics": args.phase_metrics,
         },
         "wall_time_s": wall_time_s,
         "submitted": len(records),
@@ -352,6 +416,7 @@ def summarize_records(records, args, wall_time_s):
         "decode_exec_s": summarize([r.get("decode_exec_s") for r in ok]),
         "buckets": bucket_summary,
         "errors": [r for r in failed[:20]],
+        "phase_metrics": summarize_phase_metrics(args.phase_metrics),
     }
 
 
@@ -378,6 +443,10 @@ def main():
     parser.add_argument("--model", default="unknown")
     parser.add_argument("--slo-ttft-s", type=float)
     parser.add_argument("--slo-tpot-s", type=float)
+    parser.add_argument(
+        "--phase-metrics",
+        help="Optional PHASESERVE_METRICS_PATH JSONL file to summarize with the benchmark output",
+    )
     args = parser.parse_args()
 
     start = time.time()

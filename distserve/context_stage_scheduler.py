@@ -8,6 +8,11 @@ from distserve.config import ContextStageSchedConfig, ParallelConfig
 from distserve.logger import init_logger
 from distserve.request import Request, BatchedRequests, MigratingRequest
 from distserve.block_manager import BlockManager
+from distserve.phase_scheduler import (
+    PressureBudgetController,
+    append_phase_metric,
+    ratio,
+)
 
 logger = init_logger(__name__)
 
@@ -242,6 +247,21 @@ class ContextStageCostCompatibleScheduler(ContextStageFCFSScheduler):
         self.alpha = float(os.environ.get("PHASESERVE_PREFILL_ALPHA", "0.5"))
         self.beta = float(os.environ.get("PHASESERVE_PREFILL_BETA", "0.1"))
         self.gamma = float(os.environ.get("PHASESERVE_PREFILL_GAMMA", "1.0"))
+        max_block_margin = int(os.environ.get(
+            "PHASESERVE_PBC_MAX_BLOCK_MARGIN",
+            str(max(1, int(self.block_manager.max_num_gpu_blocks * 0.10)))
+        ))
+        self.pressure_controller = PressureBudgetController(
+            component="context",
+            max_prefill_tokens=self.sched_config.max_tokens_per_batch,
+            max_prefill_block_margin=max_block_margin,
+        )
+        self.bridge_target = float(os.environ.get("PHASESERVE_PBC_BRIDGE_TARGET", "4"))
+        self.context_block_target = float(os.environ.get(
+            "PHASESERVE_PBC_CONTEXT_BLOCK_TARGET",
+            str(max(self.block_manager.max_num_gpu_blocks * 0.85, 1))
+        ))
+        self.current_budget = None
 
         self.num_dispatches = 0
         self.total_sched_time_s = 0.0
@@ -272,18 +292,41 @@ class ContextStageCostCompatibleScheduler(ContextStageFCFSScheduler):
         ]) + self.num_on_fly_request_block
         return max(self.block_manager.max_num_gpu_blocks - reserved_blocks, 0)
 
-    def _is_feasible(self, batch: BatchedRequests, request: Request) -> bool:
+    def _get_context_budget(self, protected_wait: float = 0.0):
+        reserved_blocks = self.block_manager.max_num_gpu_blocks - self._get_available_context_blocks()
+        pressures = {
+            "bridge": ratio(len(self.unaccepted_queue), self.bridge_target),
+            "decode": 0.0,
+            "kv": ratio(reserved_blocks, self.context_block_target),
+            "swap": 0.0,
+            "age": ratio(protected_wait, self.dispatch_timeout_s),
+        }
+        self.current_budget = self.pressure_controller.update(pressures)
+        return self.current_budget
+
+    def _is_feasible(self, batch: BatchedRequests, request: Request, ignore_pressure_budget: bool = False) -> bool:
+        budget = self.current_budget
+        token_budget = (
+            min(self.sched_config.max_tokens_per_batch, budget.prefill_token_budget)
+            if not ignore_pressure_budget and budget is not None and budget.prefill_token_budget > 0
+            else self.sched_config.max_tokens_per_batch
+        )
+        block_margin = (
+            budget.prefill_block_margin
+            if not ignore_pressure_budget and budget is not None
+            else 0
+        )
         return (
             len(batch) < self.sched_config.max_batch_size
         ) and (
             batch.get_num_input_tokens()
             + request.get_num_input_tokens()
-            <= self.sched_config.max_tokens_per_batch
+            <= token_budget
         ) and (
             sum([
                 self._get_block_needed(req.get_input_len())
                 for req in batch.requests + [request]
-            ]) <= self._get_available_context_blocks()
+            ]) <= max(self._get_available_context_blocks() - block_margin, 0)
         )
 
     def _score_batch(self, batch: BatchedRequests, protected_request: Request) -> float:
@@ -301,7 +344,14 @@ class ContextStageCostCompatibleScheduler(ContextStageFCFSScheduler):
             / max(self._get_available_context_blocks(), 1)
         )
         oldest_bonus = 1.0 if protected_request in batch.requests else 0.0
-        return token_fill - self.alpha * pad_waste - self.beta * block_risk + self.gamma * oldest_bonus
+        budget = self.current_budget
+        pressure_multiplier = 1.0 + (budget.rho_down if budget is not None else 0.0)
+        return (
+            token_fill
+            - self.alpha * pad_waste
+            - self.beta * pressure_multiplier * block_risk
+            + self.gamma * oldest_bonus
+        )
 
     def _ordered_bucket_requests(self, requests: List[Request], protected_request: Request) -> List[Request]:
         if not requests:
@@ -331,6 +381,7 @@ class ContextStageCostCompatibleScheduler(ContextStageFCFSScheduler):
         candidate_window = self.waiting_queue[:window_size]
         protected_request = candidate_window[0]
         protected_wait = self._get_wait_time(protected_request)
+        budget = self._get_context_budget(protected_wait)
 
         buckets = {}
         for request in candidate_window:
@@ -345,7 +396,7 @@ class ContextStageCostCompatibleScheduler(ContextStageFCFSScheduler):
             if len(batch) > 0:
                 candidate_batches.append(batch)
 
-        if protected_wait >= self.dispatch_timeout_s:
+        if protected_wait >= self.dispatch_timeout_s or budget.allow_protected_oldest:
             protected_batches = [
                 batch for batch in candidate_batches
                 if protected_request in batch.requests
@@ -354,7 +405,7 @@ class ContextStageCostCompatibleScheduler(ContextStageFCFSScheduler):
                 candidate_batches = protected_batches
             else:
                 forced_batch = BatchedRequests()
-                if self._is_feasible(forced_batch, protected_request):
+                if self._is_feasible(forced_batch, protected_request, ignore_pressure_budget=True):
                     forced_batch.add_request(protected_request)
                     candidate_batches = [forced_batch]
             self.num_oldest_forced += 1
@@ -377,7 +428,19 @@ class ContextStageCostCompatibleScheduler(ContextStageFCFSScheduler):
             for req in next_batch.requests
         ])
         self.num_dispatches += 1
-        self.total_sched_time_s += time.perf_counter() - sched_start
+        sched_time_s = time.perf_counter() - sched_start
+        self.total_sched_time_s += sched_time_s
+        append_phase_metric("context", "dispatch", {
+            "waiting": len(self.waiting_queue),
+            "unaccepted": len(self.unaccepted_queue),
+            "on_fly_blocks": self.num_on_fly_request_block,
+            "selected": len(next_batch.requests),
+            "selected_prompt_tokens": next_batch.get_num_input_tokens(),
+            "forced_oldest": protected_wait >= self.dispatch_timeout_s,
+            "sched_time_s": sched_time_s,
+            "budget": budget,
+            "controller": self.pressure_controller.metrics(),
+        })
 
         return next_batch
 

@@ -12,6 +12,11 @@ from distserve.logger import init_logger
 from distserve.request import Request, BatchedRequests, MigratingRequest
 from distserve.profiling import ProfilingDatabase
 from distserve.block_manager import BlockManager, BlockLocation
+from distserve.phase_scheduler import (
+    PressureBudgetController,
+    append_phase_metric,
+    ratio,
+)
 
 logger = init_logger(__name__)
 
@@ -299,6 +304,26 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
         self.max_level = int(os.environ.get("PHASESERVE_DECODE_MAX_LEVEL", "16"))
         self.scan_multiplier = int(os.environ.get("PHASESERVE_DECODE_SCAN_MULT", "4"))
         self.max_swap_ins_per_iter = int(os.environ.get("PHASESERVE_DECODE_MAX_SWAPINS", "1"))
+        self.max_decode_scan = max(
+            self.sched_config.max_batch_size * self.scan_multiplier,
+            self.sched_config.max_batch_size,
+            1,
+        )
+        self.pressure_controller = PressureBudgetController(
+            component="decode",
+            max_decode_scan=self.max_decode_scan,
+            max_decode_swap_budget=self.max_swap_ins_per_iter,
+        )
+        self.bridge_target = float(os.environ.get("PHASESERVE_PBC_BRIDGE_TARGET", "4"))
+        self.decode_queue_target = float(os.environ.get(
+            "PHASESERVE_PBC_DECODE_QUEUE_TARGET",
+            str(max(self.sched_config.max_batch_size * 4, 1))
+        ))
+        self.swap_queue_target = float(os.environ.get(
+            "PHASESERVE_PBC_SWAP_TARGET",
+            str(max(self.max_swap_ins_per_iter * 4, 1))
+        ))
+        self.current_budget = None
 
         self.consecutive_skips = {}
         self.num_iterations = 0
@@ -306,6 +331,10 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
         self.total_selected = 0
         self.total_starved_selected = 0
         self.total_swap_ins = 0
+        self.total_swap_in_bytes = 0
+        self.total_iteration_stall_s = 0.0
+        self.total_resident_selected = 0
+        self.total_evictions = 0
 
         if self.parallel_config.pipeline_parallel_size != 1:
             logger.warning(
@@ -344,12 +373,45 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
             deduped.append(request)
         return deduped
 
+    def _estimate_kv_bytes(self, request: Request) -> int:
+        blocks = self.block_manager.get_allocated_num_blocks(request.request_id)
+        hidden_size = self.block_manager.model_config.get_hidden_size()
+        dtype_size = self.block_manager.model_config.get_dtype_size()
+        num_layers = getattr(
+            self.block_manager.model_config.hf_config,
+            "num_hidden_layers",
+            getattr(self.block_manager.model_config.hf_config, "n_layer", 1),
+        )
+        # key + value cache.
+        return int(blocks * self.block_manager.cache_config.block_size * hidden_size * num_layers * 2 * dtype_size)
+
+    def _get_decode_budget(self):
+        waiting_ready = len(self.waiting_queue) + len(self.swapped_queue)
+        kv_used = self.block_manager.max_num_gpu_blocks - self.block_manager.get_num_avail_gpu_blocks()
+        swapping_blocks = (
+            len(getattr(self.block_manager, "swapping_cpu_blocks_list", []))
+            + len(getattr(self.block_manager, "swapping_gpu_blocks_list", []))
+        )
+        max_skip = max(self.consecutive_skips.values(), default=0)
+        pressures = {
+            "bridge": ratio(len(self.unaccepted_queue), self.bridge_target),
+            "decode": ratio(waiting_ready, self.decode_queue_target),
+            "kv": ratio(kv_used, max(self.block_manager.max_num_gpu_blocks, 1)),
+            "swap": max(
+                ratio(len(self.swapped_queue), self.swap_queue_target),
+                ratio(swapping_blocks, max(self.block_manager.max_num_gpu_blocks, 1)),
+            ),
+            "age": ratio(max_skip, self.skip_threshold),
+        }
+        self.current_budget = self.pressure_controller.update(pressures)
+        return self.current_budget
+
     def _get_append_blocks_needed_safe(self, request: Request) -> int:
         if self.block_manager.get_location(request.request_id) != BlockLocation.GPU:
             return 0
         return max(self.block_manager.get_num_append_blocks_needed(request), 0)
 
-    def _can_add_to_las_batch(self, batch: BatchedRequests, request: Request, swap_ins_used: int) -> bool:
+    def _can_add_to_las_batch(self, batch: BatchedRequests, request: Request, swap_ins_used: int, budget) -> bool:
         if len(batch) >= self.sched_config.max_batch_size:
             return False
         if batch.get_num_input_tokens() + request.get_num_input_tokens() > self.sched_config.max_tokens_per_batch:
@@ -364,7 +426,12 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
             ])
             return append_needed + selected_append_needed <= self.block_manager.get_num_avail_gpu_blocks()
 
-        if swap_ins_used >= self.max_swap_ins_per_iter:
+        swap_budget = (
+            budget.decode_swap_budget_per_iter
+            if budget is not None
+            else self.max_swap_ins_per_iter
+        )
+        if swap_ins_used >= swap_budget:
             return False
         blocks_to_swap_in = self.block_manager.get_allocated_num_blocks(request.request_id)
         return blocks_to_swap_in <= self.block_manager.get_num_avail_gpu_blocks()
@@ -403,22 +470,30 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
             return self.batch_queues[self.cur_index]
 
         ordered_requests = sorted(ready_requests, key=self._ready_sort_key)
-        scan_limit = max(
-            self.sched_config.max_batch_size * self.scan_multiplier,
-            self.sched_config.max_batch_size,
-            1,
-        )
+        budget = self._get_decode_budget()
+        scan_limit = budget.decode_scan_limit if budget.decode_scan_limit > 0 else self.max_decode_scan
 
         selected_ids = set()
         swap_ins_used = 0
+        swap_in_bytes = 0
+        swap_stall_s = 0.0
+        resident_selected = 0
         selected_starved = 0
         for request in ordered_requests[:scan_limit]:
-            if self._can_add_to_las_batch(self.batch_queues[self.cur_index], request, swap_ins_used):
+            was_resident = self._is_resident(request)
+            if self._can_add_to_las_batch(self.batch_queues[self.cur_index], request, swap_ins_used, budget):
                 if not self._is_resident(request):
                     logger.info("KV-aware LAS swap-in triggered")
+                    estimated_bytes = self._estimate_kv_bytes(request)
+                    swap_start = time.perf_counter()
                     self.block_manager.swap_in_requests([request])
+                    swap_stall_s += time.perf_counter() - swap_start
+                    swap_in_bytes += estimated_bytes
                     swap_ins_used += 1
                     self.total_swap_ins += 1
+                    self.total_swap_in_bytes += estimated_bytes
+                elif was_resident:
+                    resident_selected += 1
                 if self._is_starved(request):
                     selected_starved += 1
                 self.batch_queues[self.cur_index].add_request(request)
@@ -433,6 +508,27 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
         self.total_sched_time_s += time.perf_counter() - sched_start
         self.total_selected += len(selected_ids)
         self.total_starved_selected += selected_starved
+        self.total_resident_selected += resident_selected
+        self.total_iteration_stall_s += swap_stall_s
+        append_phase_metric("decode", "dispatch", {
+            "unaccepted": len(self.unaccepted_queue),
+            "waiting": len(self.waiting_queue),
+            "swapped": len(self.swapped_queue),
+            "ready": len(ready_requests),
+            "selected": len(selected_ids),
+            "resident_selected": resident_selected,
+            "resident_admission_ratio": resident_selected / max(len(selected_ids), 1),
+            "starved_selected": selected_starved,
+            "swap_ins": swap_ins_used,
+            "swap_in_bytes": swap_in_bytes,
+            "iteration_stall_s": swap_stall_s,
+            "eviction_count": 0,
+            "max_consecutive_skips": max(self.consecutive_skips.values(), default=0),
+            "scan_limit": scan_limit,
+            "sched_time_s": time.perf_counter() - sched_start,
+            "budget": budget,
+            "controller": self.pressure_controller.metrics(),
+        })
 
         return self.batch_queues[self.cur_index]
 
@@ -459,6 +555,12 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
                 migrating_req.req.phaseserve_decode_ready_time = time.perf_counter()
                 self.waiting_queue.append(migrating_req.req)
                 self.consecutive_skips.setdefault(migrating_req.req.request_id, 0)
+                append_phase_metric("decode", "bridge_accept", {
+                    "request_id": migrating_req.req.request_id,
+                    "unaccepted": len(self.unaccepted_queue),
+                    "waiting": len(self.waiting_queue),
+                    "avail_gpu_blocks": self.block_manager.get_num_avail_gpu_blocks(),
+                })
             else:
                 break
 
@@ -478,7 +580,11 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
             f"{len(self.waiting_queue)} waiting, {len(self.swapped_queue)} swapped, "
             f"{self.get_processing_num_requests()} processing, "
             f"avg_sched_ms={avg_sched_ms:.3f}, selected={self.total_selected}, "
-            f"starved_selected={self.total_starved_selected}, swap_ins={self.total_swap_ins}"
+            f"starved_selected={self.total_starved_selected}, swap_ins={self.total_swap_ins}, "
+            f"swap_in_MB={self.total_swap_in_bytes / (1024 * 1024):.2f}, "
+            f"stall_s={self.total_iteration_stall_s:.6f}, "
+            f"resident_selected={self.total_resident_selected}, "
+            f"mode_switch_rate={self.pressure_controller.metrics()['mode_switch_rate']:.4f}"
         )
     
 def get_decoding_stage_scheduler(
