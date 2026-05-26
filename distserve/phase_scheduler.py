@@ -3,6 +3,7 @@ import math
 import os
 import time
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Dict, Optional
 
 
@@ -28,6 +29,16 @@ def ratio(value: float, target: float) -> float:
     if target <= 0:
         return 0.0
     return clamp(value / target)
+
+
+def _json_safe(value):
+    if hasattr(value, "__dataclass_fields__"):
+        return asdict(value)
+    if isinstance(value, dict):
+        return {key: _json_safe(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(val) for val in value]
+    return value
 
 
 @dataclass
@@ -213,6 +224,61 @@ class PressureBudgetController:
         }
 
 
+def write_pressure_snapshot(component: str, pressures: Dict, budget: Optional[AdmissionBudget], extra: Optional[Dict] = None) -> None:
+    snapshot_path = os.environ.get("PHASESERVE_PRESSURE_SNAPSHOT_PATH")
+    if not snapshot_path:
+        return
+    record = {
+        "timestamp": time.time(),
+        "component": component,
+        "pid": os.getpid(),
+        "pressures": _json_safe(pressures),
+        "budget": _json_safe(budget),
+    }
+    if extra:
+        record.update(_json_safe(extra))
+    path = Path(snapshot_path)
+    tmp_path = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
+        os.replace(str(tmp_path), str(path))
+    except Exception:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def read_pressure_snapshot(expected_component: Optional[str] = None) -> Optional[Dict]:
+    snapshot_path = os.environ.get("PHASESERVE_PRESSURE_SNAPSHOT_PATH")
+    if not snapshot_path:
+        return None
+    path = Path(snapshot_path)
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {
+            "available": False,
+            "path": str(path),
+        }
+    now = time.time()
+    timestamp = float(record.get("timestamp", 0.0) or 0.0)
+    max_age_s = _env_float("PHASESERVE_PRESSURE_SNAPSHOT_MAX_AGE_S", 2.0)
+    age_s = max(now - timestamp, 0.0) if timestamp > 0 else None
+    component = record.get("component")
+    stale = age_s is None or age_s > max_age_s
+    wrong_component = expected_component is not None and component != expected_component
+    record.update({
+        "available": True,
+        "path": str(path),
+        "age_s": age_s,
+        "stale": stale,
+        "wrong_component": wrong_component,
+    })
+    return record
+
+
 def append_phase_metric(component: str, event: str, payload: Dict) -> None:
     metrics_path = os.environ.get("PHASESERVE_METRICS_PATH")
     if not metrics_path:
@@ -224,8 +290,7 @@ def append_phase_metric(component: str, event: str, payload: Dict) -> None:
         "pid": os.getpid(),
     }
     record.update(payload)
-    if "budget" in record and hasattr(record["budget"], "__dataclass_fields__"):
-        record["budget"] = asdict(record["budget"])
+    record = _json_safe(record)
     try:
         with open(metrics_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, sort_keys=True) + "\n")

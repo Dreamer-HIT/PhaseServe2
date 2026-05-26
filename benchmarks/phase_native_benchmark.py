@@ -101,6 +101,12 @@ def summarize_phase_metrics(path: Optional[str]) -> Dict:
                 "prefill_token_budget": summarize([b.get("prefill_token_budget") for b in budgets]),
                 "prefill_block_margin": summarize([b.get("prefill_block_margin") for b in budgets]),
                 "forced_oldest": sum(1 for r in dispatch_rows if r.get("forced_oldest")),
+                "decode_snapshot_used": sum(1 for r in dispatch_rows if (r.get("decode_snapshot") or {}).get("used")),
+                "decode_snapshot_stale": sum(1 for r in dispatch_rows if (r.get("decode_snapshot") or {}).get("stale")),
+                "decode_snapshot_age_s": summarize([
+                    (r.get("decode_snapshot") or {}).get("age_s")
+                    for r in dispatch_rows
+                ]),
                 "scoring_modes": {
                     mode: sum(1 for r in dispatch_rows if r.get("scoring_mode") == mode)
                     for mode in sorted({r.get("scoring_mode") for r in dispatch_rows if r.get("scoring_mode")})

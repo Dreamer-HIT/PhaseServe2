@@ -34,6 +34,8 @@
 
 最终主文的机制归因应结合 `docs/bucket_breakdown_validation.md`：BPS 用 prompt bucket 的 TTFT 证明，KAS 用 output bucket 的 TPOT 证明，PBC 用 `phase` vs `bps_kas` 的 full-system 稳定性证明。
 
+实现层面，`phase` 现在应被理解为 `BPS + KAS + dynamic PBC + cross-stage decode pressure feedback`。跨阶段闭环实现见 `docs/cross_stage_pbc_implementation.md`。因此后续 PBC 消融必须优先看 `phase` 相对 `bps_kas` 是否降低 bridge/swap/TPOT tail 或提升 SLO goodput。
+
 相关脚本：
 
 - `scripts/run_phase_hetero_1p1d.sh`

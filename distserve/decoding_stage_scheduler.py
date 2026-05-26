@@ -16,6 +16,7 @@ from distserve.phase_scheduler import (
     PressureBudgetController,
     append_phase_metric,
     ratio,
+    write_pressure_snapshot,
 )
 
 logger = init_logger(__name__)
@@ -405,6 +406,19 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
             "age": ratio(max_skip, self.skip_threshold),
         }
         self.current_budget = self.pressure_controller.update(pressures)
+        write_pressure_snapshot(
+            "decode",
+            pressures,
+            self.current_budget,
+            extra={
+                "unaccepted": len(self.unaccepted_queue),
+                "waiting": len(self.waiting_queue),
+                "swapped": len(self.swapped_queue),
+                "processing": self.get_processing_num_requests(),
+                "available_gpu_blocks": self.block_manager.get_num_avail_gpu_blocks(),
+                "max_gpu_blocks": self.block_manager.max_num_gpu_blocks,
+            },
+        )
         return self.current_budget
 
     def _get_append_blocks_needed_safe(self, request: Request) -> int:
@@ -507,6 +521,7 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
         self.batch_queues[self.cur_index] = BatchedRequests()
 
         if not ready_requests:
+            self._get_decode_budget()
             self.num_iterations += 1
             self.total_sched_time_s += time.perf_counter() - sched_start
             return self.batch_queues[self.cur_index]

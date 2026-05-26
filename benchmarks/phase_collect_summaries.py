@@ -77,6 +77,9 @@ def flatten_summary(path: Path):
     row["phase_context_prefill_budget_mean"] = (context.get("prefill_token_budget") or {}).get("mean")
     row["phase_context_selected_mean"] = (context.get("selected") or {}).get("mean")
     row["phase_context_forced_oldest"] = context.get("forced_oldest")
+    row["phase_context_decode_snapshot_used"] = context.get("decode_snapshot_used")
+    row["phase_context_decode_snapshot_stale"] = context.get("decode_snapshot_stale")
+    row["phase_context_decode_snapshot_age_mean"] = (context.get("decode_snapshot_age_s") or {}).get("mean")
     return row
 
 
@@ -102,6 +105,7 @@ def write_markdown(rows, output_path: Path):
         "phase_decode_scan_mean",
         "phase_decode_selected_mean",
         "phase_context_prefill_budget_mean",
+        "phase_context_decode_snapshot_used",
     ]
     with output_path.open("w") as f:
         f.write("| " + " | ".join(columns) + " |\n")

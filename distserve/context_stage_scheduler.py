@@ -11,6 +11,7 @@ from distserve.block_manager import BlockManager
 from distserve.phase_scheduler import (
     PressureBudgetController,
     append_phase_metric,
+    read_pressure_snapshot,
     ratio,
 )
 
@@ -266,6 +267,7 @@ class ContextStageCostCompatibleScheduler(ContextStageFCFSScheduler):
             str(max(self.block_manager.max_num_gpu_blocks * 0.85, 1))
         ))
         self.current_budget = None
+        self.last_decode_snapshot = {"available": False}
 
         self.num_dispatches = 0
         self.total_sched_time_s = 0.0
@@ -304,6 +306,23 @@ class ContextStageCostCompatibleScheduler(ContextStageFCFSScheduler):
             "kv": ratio(reserved_blocks, self.context_block_target),
             "swap": 0.0,
             "age": ratio(protected_wait, self.dispatch_timeout_s),
+        }
+        snapshot = read_pressure_snapshot(expected_component="decode")
+        snapshot_used = False
+        if snapshot and snapshot.get("available") and not snapshot.get("stale") and not snapshot.get("wrong_component"):
+            decode_pressures = snapshot.get("pressures") or {}
+            pressures["bridge"] = max(pressures["bridge"], float(decode_pressures.get("bridge", 0.0) or 0.0))
+            pressures["decode"] = float(decode_pressures.get("decode", 0.0) or 0.0)
+            pressures["kv"] = max(pressures["kv"], float(decode_pressures.get("kv", 0.0) or 0.0))
+            pressures["swap"] = float(decode_pressures.get("swap", 0.0) or 0.0)
+            snapshot_used = True
+        self.last_decode_snapshot = {
+            "available": bool(snapshot and snapshot.get("available")),
+            "used": snapshot_used,
+            "age_s": (snapshot or {}).get("age_s"),
+            "stale": bool(snapshot and snapshot.get("stale")),
+            "wrong_component": bool(snapshot and snapshot.get("wrong_component")),
+            "pressures": (snapshot or {}).get("pressures", {}),
         }
         self.current_budget = self.pressure_controller.update(pressures)
         return self.current_budget
@@ -457,6 +476,7 @@ class ContextStageCostCompatibleScheduler(ContextStageFCFSScheduler):
             "selected_prompt_tokens": next_batch.get_num_input_tokens(),
             "forced_oldest": protected_wait >= self.dispatch_timeout_s,
             "scoring_mode": self.scoring_mode,
+            "decode_snapshot": self.last_decode_snapshot,
             "sched_time_s": sched_time_s,
             "budget": budget,
             "controller": self.pressure_controller.metrics(),

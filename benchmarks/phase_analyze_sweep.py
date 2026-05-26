@@ -105,6 +105,9 @@ def load_summary(path: Path):
         "phase_decode_scan_mean": (decode.get("decode_scan_limit") or {}).get("mean"),
         "phase_decode_selected_mean": (decode.get("selected") or {}).get("mean"),
         "phase_context_prefill_budget_mean": (context.get("prefill_token_budget") or {}).get("mean"),
+        "phase_context_decode_snapshot_used": context.get("decode_snapshot_used"),
+        "phase_context_decode_snapshot_stale": context.get("decode_snapshot_stale"),
+        "phase_context_decode_snapshot_age_mean": (context.get("decode_snapshot_age_s") or {}).get("mean"),
     }
 
 
