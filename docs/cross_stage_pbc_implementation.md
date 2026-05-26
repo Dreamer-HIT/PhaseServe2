@@ -150,6 +150,16 @@ phase vs bps_kas
 - `phase` 启用 dynamic PBC，因此同样的 decode pressure 会收缩 prefill token budget 并提高 block margin。
 - 这证明当前 `phase vs bps_kas` 已经具备 PBC 消融语义；smoke 只验证链路，不作为性能结论。
 
+## 2-Seed Validation
+
+第一轮 PBC 专项验证见 `docs/cross_stage_pbc_validation.md`。结论是：跨阶段 PBC 已具备真实控制效果，但原先 aggressive 参数会过度收缩 prefill budget；后续默认采用 tuned 参数：
+
+```bash
+PHASESERVE_PBC_RHO_LOW=0.45
+PHASESERVE_PBC_RHO_HIGH=0.65
+PHASESERVE_PBC_MIN_PREFILL_FRAC=0.75
+```
+
 ## 当前限制
 
 1. snapshot 是文件级轻量通信，不是低延迟控制面。它适合 1p1d 实验和论文原型，但未来多实例部署应换成共享控制面或 actor message。

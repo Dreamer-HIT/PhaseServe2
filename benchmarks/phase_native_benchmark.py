@@ -80,6 +80,7 @@ def summarize_phase_metrics(path: Optional[str]) -> Dict:
         rows = [r for r in records if r.get("component", "unknown") == component]
         dispatch_rows = [r for r in rows if r.get("event") == "dispatch"]
         budgets = [r.get("budget", {}) for r in dispatch_rows]
+        controllers = [r.get("controller", {}) for r in dispatch_rows]
         pressures = [b.get("pressures", {}) for b in budgets]
         by_component[component] = {
             "records": len(rows),
@@ -95,10 +96,20 @@ def summarize_phase_metrics(path: Optional[str]) -> Dict:
             "pressure_swap": summarize([p.get("swap") for p in pressures]),
             "selected": summarize([r.get("selected") for r in dispatch_rows]),
             "sched_time_s": summarize([r.get("sched_time_s") for r in dispatch_rows]),
+            "controller_mode_switch_rate": summarize([c.get("mode_switch_rate") for c in controllers]),
+            "controller_budget_delta": summarize([c.get("last_budget_delta") for c in controllers]),
         }
         if component == "context":
+            prefill_budget_ratios = []
+            for row, budget in zip(dispatch_rows, budgets):
+                max_prefill_tokens = row.get("max_prefill_tokens")
+                if max_prefill_tokens:
+                    prefill_budget_ratios.append(
+                        budget.get("prefill_token_budget") / max(max_prefill_tokens, 1)
+                    )
             by_component[component].update({
                 "prefill_token_budget": summarize([b.get("prefill_token_budget") for b in budgets]),
+                "prefill_budget_ratio": summarize(prefill_budget_ratios),
                 "prefill_block_margin": summarize([b.get("prefill_block_margin") for b in budgets]),
                 "forced_oldest": sum(1 for r in dispatch_rows if r.get("forced_oldest")),
                 "decode_snapshot_used": sum(1 for r in dispatch_rows if (r.get("decode_snapshot") or {}).get("used")),

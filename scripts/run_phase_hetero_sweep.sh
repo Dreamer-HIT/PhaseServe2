@@ -10,6 +10,7 @@ NUM_PROMPTS=${NUM_PROMPTS:-48}
 DATASET_SIZE=${DATASET_SIZE:-${NUM_PROMPTS}}
 PROCESS_NAME=${PROCESS_NAME:-poisson}
 POLICIES=${POLICIES:-"phase fcfs"}
+BASELINE_POLICY=${BASELINE_POLICY:-fcfs}
 PROMPT_MIX=${PROMPT_MIX:-"64:0.50,256:0.30,512:0.20"}
 OUTPUT_MIX=${OUTPUT_MIX:-"64:0.30,128:0.30,256:0.20,512:0.15,1024:0.05"}
 DATASET_NAME=${DATASET_NAME:-"phaseserve-synthetic-heterogeneous"}
@@ -46,6 +47,7 @@ done
 
 "${PYTHON}" benchmarks/phase_analyze_sweep.py \
   "${SWEEP_ROOT}" \
-  --output-prefix "${SWEEP_ROOT}/sweep_analysis"
+  --output-prefix "${SWEEP_ROOT}/sweep_analysis" \
+  --baseline-policy "${BASELINE_POLICY}"
 
 echo "SWEEP_ROOT=${SWEEP_ROOT}"

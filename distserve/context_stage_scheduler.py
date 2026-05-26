@@ -474,6 +474,7 @@ class ContextStageCostCompatibleScheduler(ContextStageFCFSScheduler):
             "on_fly_blocks": self.num_on_fly_request_block,
             "selected": len(next_batch.requests),
             "selected_prompt_tokens": next_batch.get_num_input_tokens(),
+            "max_prefill_tokens": self.sched_config.max_tokens_per_batch,
             "forced_oldest": protected_wait >= self.dispatch_timeout_s,
             "scoring_mode": self.scoring_mode,
             "decode_snapshot": self.last_decode_snapshot,
