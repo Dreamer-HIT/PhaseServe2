@@ -200,6 +200,19 @@ subject to  q_bridge(t) <= q_bridge_target
 
 PBC 的角色是把这个约束问题转化为每轮可执行的预算 `b(t)`。换言之，PBC 是一个低开销近似求解器：当 pressure 低时扩大 feasible region 以提高 goodput，当 downstream pressure 接近约束边界时单调收缩 feasible region 以降低 pressure drift。它不声称求解离线最优，而是用 monotone feasible-region shrinking 近似 bounded-pressure goodput maximization。
 
+PBC 要证明的因果链应在论文和实验中固定为：
+
+```text
+pressure approaches target
+  -> PBC shrinks pressure-increasing feasible region
+  -> BPS injects less KV footprint and KAS admits cheaper active sets
+  -> bridge queue / swap pressure / pressure overshoot decreases
+  -> more requests satisfy TTFT/TPOT SLO
+  -> SLO goodput improves
+```
+
+如果实验只能显示某个 latency percentile 偶然改善，却不能显示这条 pressure chain 成立，则 PBC 不应被 claim 为核心贡献。
+
 BPS 和 KAS 的角色不是各自追求局部最优，而是在 `b(t)` 下选择阶段动作：
 
 ```text
@@ -216,10 +229,10 @@ subject to progress invariant
 
 这个统一模板在两个阶段中的实例化如下：
 
-| Phase policy | Action `a_t` | Feasible set `A_phase(b(t))` | Utility terms | Progress invariant | Failure metric |
-|---|---|---|---|---|---|
-| BPS | prefill batch | request/token/KV block budget、PBC prefill margin、bounded candidate window | token fill、padding waste、block risk、oldest bonus | oldest request 超过 `tau_prefill` 后必须被包含或单独 dispatch | long-prompt wait、TTFT tail、protected dispatch ratio |
-| KAS | decode active set | decode request budget、GPU block budget、swap budget per iteration、scan limit | attained-service priority、resident preference、swap feasibility、waiting age | starved request 在资源可行时不能被同级非 starved request 无限绕过 | max skips、long-output slowdown、swap stall、resident admission ratio |
+| Phase policy | Action `a_t` | Feasible set `A_phase(b(t))` | Utility terms | Baseline equivalence | Added-by-PBC constraint | Progress invariant | Failure metric |
+|---|---|---|---|---|---|---|---|
+| BPS | prefill batch | request/token/KV block budget、PBC prefill margin、bounded candidate window | token fill、padding waste、block risk、oldest bonus | bucket / size-aware batching | dynamic prefill token budget、block margin、small-KV preference | oldest request 超过 `tau_prefill` 后必须被包含或单独 dispatch | long-prompt wait、TTFT tail、protected dispatch ratio |
+| KAS | decode active set | decode request budget、GPU block budget、swap budget per iteration、scan limit | attained-service priority、resident preference、swap feasibility、waiting age | LAS / MLFQ decode scheduling | swap budget、resident admission budget、scan limit under pressure | starved request 在资源可行时不能被同级非 starved request 无限绕过 | max skips、long-output slowdown、swap stall、resident admission ratio |
 
 在该目标下，PhaseServe 在线维护两个性质：
 
@@ -830,11 +843,11 @@ l_decode_scan_raw =
 
 论文中应把它作为设计选择而不是唯一真理，并做 sensitivity：
 
-```text
-rho_down = max(p_i)                         # bottleneck-dominant, default
-rho_down = sum(w_i * p_i)                   # weighted pressure, smoother
-rho_down = lexicographic(p_kv, p_swap, ...) # memory-first overload control
-```
+| Aggregation | 适用条件 | 预期优势 | 失败边界 | 实验用途 |
+|---|---|---|---|---|
+| `max(p_i)` | 单瓶颈主导；decode/KV/swap 共享下游资源池 | 不会被平均压力掩盖单点过载；默认策略 | 多压力源温和叠加时可能过度保守 | 主结果和 bottleneck-dominant workload |
+| `sum(w_i * p_i)` | 多压力源同时中等偏高，但无单点爆表 | 更平滑，可能保持更高吞吐 | 权重选择可能被质疑为调参 | sensitivity / robustness |
+| `lexicographic(p_kv, p_swap, ...)` | memory 或 swap 是硬瓶颈 | 优先避免 OOM / stall | 可能牺牲 TTFT 或 prefill utilization | memory-pressure ablation |
 
 如果 `max` 在实验中频繁导致过度保守，PhaseServe 的 claim 应收窄为“bottleneck-dominant pressure control 适合 memory/decode-pressure workload”，而不是声称所有负载下最优。
 
@@ -1128,6 +1141,13 @@ distserve/decoding_stage_scheduler.py
 - 基于 KV residency 做同级 tie-break
 - 基于 GPU block budget 和 swap budget 做 admission
 
+KAS 的最低实现兑现标准：
+
+1. `decode_swap_budget_per_iter` 必须进入 admission feasibility，而不能只作为日志字段。
+2. 每轮必须记录 `swap_in_bytes`、`swap_out_bytes`、`resident_admission_ratio`、`iteration_stall_time` 和 `eviction_count`。
+3. 如果第一版无法真正控制 swap budget，只能做 resident-first tie-break，则论文主 claim 必须降级为 “residency-aware attained-service scheduling”，不能把 `KV-constrained` 放在主贡献标题中。
+4. Memory-pressure workload 中，KAS 必须相对 KV-unaware LAS 改善 swap/stall 或 resident ratio，否则 KAS 的 KV claim 失败。
+
 ### Block Manager
 
 当前文件：
@@ -1170,14 +1190,14 @@ distserve/single_stage_engine.py
 
 论文应预注册 workload class 和 primary metric，避免实验结果被认为 cherry-pick：
 
-| Workload class | 压力来源 | Primary metric | Secondary metric | 预期结果 | Claim failure condition |
-|---|---|---|---|---|---|
-| Prompt-skew | prompt length 高度偏斜，prefill queue head-of-line blocking | TTFT p95/p99、context queue time | prefill utilization、long-prompt wait | BPS 明显改善；PBC 低压时不应伤害吞吐 | BPS 无法优于 FCFS / shortest-prompt 或长 prompt starvation 明显恶化 |
-| Decode-variance | output length 长尾，短/长输出混合 | TPOT p95/p99、short-request slowdown | long-output slowdown、skip count | KAS 改善短请求和 TPOT tail，但可能轻微牺牲长输出均值 | KAS 只改善短请求但 long-output slowdown 或 max skips 失控 |
-| Decode-pressure | decode 阶段接近饱和，bridge queue 增长 | SLO goodput、bridge queue length | TTFT median、prefill token throughput | PBC+BPS 应降低下游过载，允许 TTFT median 小幅 tradeoff | PBC 不能降低 bridge queue / SLO goodput，说明 pressure-budget claim 失败 |
-| Memory-pressure | GPU KV block 紧张或 swap 频繁 | swap bytes、iteration stall、resident admission ratio | TPOT tail、eviction count | KAS 的 KV/swap 约束必须显著优于 KV-unaware LAS | swap bytes、stall 或 resident ratio 没有改善，不能 claim KV-constrained scheduling |
-| Homogeneous / low-load | prompt/output 都同质或负载远低于饱和 | overhead、no-regression latency | throughput | PhaseServe 收益应下降；重点证明 overhead 可忽略 | overhead 明显伤害 median latency 或 throughput，部署价值不足 |
-| Swap-dominated overload | swap 带宽成为主瓶颈 | goodput under SLO、swap stall time | rejection/timeout ratio | PhaseServe 不应 claim 总能修复，必要时讨论 admission control 边界 | 如果所有策略都过载，论文应承认需要 admission/rejection，而不是扩大 PhaseServe claim |
+| Workload class | Trace / generation rule | Load level | 压力来源 | Primary metric | Secondary metric | 预期结果 | Claim failure condition |
+|---|---|---|---|---|---|---|---|
+| Prompt-skew | 真实 trace 的 prompt 分布或 controlled Zipf/lognormal prompt lengths | medium-high | prompt length 高度偏斜，prefill queue head-of-line blocking | TTFT p95/p99、context queue time | prefill utilization、long-prompt wait | BPS 明显改善；PBC 低压时不应伤害吞吐 | BPS 无法优于 FCFS / shortest-prompt 或长 prompt starvation 明显恶化 |
+| Decode-variance | 真实 trace 的 output 分布或 controlled heavy-tail output lengths | medium-high | output length 长尾，短/长输出混合 | TPOT p95/p99、short-request slowdown | long-output slowdown、skip count | KAS 改善短请求和 TPOT tail，但可能轻微牺牲长输出均值 | KAS 只改善短请求但 long-output slowdown 或 max skips 失控 |
+| Decode-pressure | 提高 arrival rate 到 decode 接近饱和 | high | decode 阶段接近饱和，bridge queue 增长 | SLO goodput、bridge queue length | TTFT median、prefill token throughput | PBC+BPS 应降低下游过载，允许 TTFT median 小幅 tradeoff | PBC 不能降低 bridge queue / SLO goodput，说明 pressure-budget claim 失败 |
+| Memory-pressure | 降低 GPU KV block budget 或提高并发长度 | medium-high | GPU KV block 紧张或 swap 频繁 | swap bytes、iteration stall、resident admission ratio | TPOT tail、eviction count | KAS 的 KV/swap 约束必须显著优于 KV-unaware LAS | swap bytes、stall 或 resident ratio 没有改善，不能 claim KV-constrained scheduling |
+| Homogeneous / low-load | prompt/output 同质，arrival rate 远低于饱和 | low | 无明显压力瓶颈 | overhead、no-regression latency | throughput | PhaseServe 收益应下降；重点证明 overhead 可忽略 | overhead 明显伤害 median latency 或 throughput，部署价值不足 |
+| Swap-dominated overload | 故意让 swap 带宽成为硬瓶颈 | overload | swap 带宽成为主瓶颈 | goodput under SLO、swap stall time | rejection/timeout ratio | PhaseServe 不应 claim 总能修复，必要时讨论 admission control 边界 | 如果所有策略都过载，论文应承认需要 admission/rejection，而不是扩大 PhaseServe claim |
 
 这张表应成为实验章节的约束：每类 workload 先声明 primary metric，再看 PhaseServe 是否改善该类 bottleneck。不要在实验后临时挑选提升最大的指标作为主结果。
 
@@ -1331,9 +1351,9 @@ PhaseServe 不 claim 新 KV cache architecture。它只把 KV block pressure 作
 
 ## 最终判断
 
-现有方法论不建议直接进入实验阶段。
+现有方法论已经完成主线收敛，不建议继续大幅扩展方法论。下一步可以进入实现和实验阶段，但必须按本文预注册的 workload class、primary metric 和 claim failure condition 验证。
 
-更稳的下一步是先把方法论收敛成：
+当前冻结的论文方法是：
 
 ```text
 pressure-budgeted phase scheduling
@@ -1344,4 +1364,4 @@ pressure-budgeted phase scheduling
 
 如果后续实现和实验能够证明这三点，PhaseServe 就有机会成为一篇扎实的系统论文。
 
-如果继续沿着当前初稿中更宽泛的方向推进，风险是论文看起来 claim 很大，但 reviewer 会认为每个点都不够深，最终变成“一个工程系统加若干 heuristic”，顶会说服力会弱很多。
+如果实验不能证明 PBC 的 pressure chain、BPS 的 prompt-skew 收益和 KAS 的 KV/swap 约束收益，则应主动降级相应 claim，而不是继续扩大系统边界。此后继续打磨文字的收益有限，真正的论文风险已经转移到实现是否兑现预算机制、指标链路是否完整、baseline 是否公平。
