@@ -18,6 +18,20 @@
 
 其中 static budget 通过 `PHASESERVE_PBC_DISABLE_DYNAMIC=1` 实现。它保留 BPS/KAS 的局部调度逻辑，但关闭 pressure-to-budget 动态收缩，用来判断 PBC 是否真的贡献了额外收益。
 
+## 论文呈现原则
+
+最终论文主文不应展示所有内部 variant。主文 ablation 需要回答的是“核心机制是否必要”，而不是“每个调参项是否有效”。建议主文保留以下 4 到 5 个 policy：
+
+| Policy | 用途 |
+|---|---|
+| `fcfs` | DistServe baseline |
+| `kas` | 验证 decode-side KV-aware active-set scheduling 的独立贡献 |
+| `bps_kas` | 验证 prefill-side batch shaping 与 KAS 的组合效果 |
+| `phase` | 验证完整系统，包括动态 PBC |
+| `bps` | 只在 prefill-skew workload 中保留，用于说明 BPS 的适用边界 |
+
+`bps_bucket_only`、`bps_no_oldest_bonus`、`bps_age_bonus` 这类变体只作为内部诊断或 appendix 候选。除非其中某个变体成为最终采用的算法版本，否则不进入主文核心表格。主文最多用一张小型 “BPS design sensitivity” 图说明 BPS 对 scoring 设计敏感，避免把论文叙事变成大规模参数搜索。
+
 相关脚本：
 
 - `scripts/run_phase_hetero_1p1d.sh`
@@ -160,3 +174,15 @@ Probe 配置：
 1. 先拆 KAS 内部 ablation：`kas_no_evict`、`kas_no_nexttoken_reserve`、`kas_no_resident_preference`。
 2. 重新调 BPS，优先降低 burst 下对 TTFT p99 的伤害。
 3. 如果后续 5-seed 仍是 `kas >= phase`，方法论文档需要改成 KAS-first：PBC 作为稳定性/预算接口，而不是主收益来源。
+
+## BPS 内部变体结论
+
+内部诊断脚本 `scripts/run_phase_bps_internal_sweep.sh` 已覆盖 `bps_bucket_only`、`bps_no_oldest_bonus`、`bps_age_bonus`。2-seed prefill-skew 结果见 `docs/prefill_skew_validation.md`，结果目录为：
+
+- `/root/data/phase_scheduler_results/bps_internal2_20260526_223425`
+
+结论是：默认 `bps` 在 burst/rate0 和 rate6 下比三个内部变体更均衡；`bucket_only` 有时吞吐更高但 tail 更差；`no_oldest_bonus` 会把部分风险转移到 TPOT tail；`age_bonus` 没有稳定改善。因此，当前最终论文 ablation 不需要包括全部内部变体。更合理的结构是：
+
+1. 主文：`fcfs`、`kas`、`bps_kas`、`phase`，必要时在 prefill-skew workload 加 `bps`。
+2. Appendix 或技术报告：只放一个 BPS sensitivity 小表，说明为什么没有把 `bucket_only/age_bonus` 作为最终算法。
+3. 后续若 BPS 被重新设计并显著优于当前默认版本，则用新 BPS 替换 `bps` policy，而不是追加更多 variant。

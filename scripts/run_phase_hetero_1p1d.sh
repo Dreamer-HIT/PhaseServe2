@@ -147,6 +147,7 @@ start_server() {
   local decode_policy="fcfs"
   local emit_phase_metrics=0
   local dynamic_pbc=0
+  local prefill_scoring_mode="default"
 
   case "${policy}" in
     fcfs)
@@ -157,6 +158,24 @@ start_server() {
       context_policy="phase"
       decode_policy="fcfs"
       emit_phase_metrics=1
+      ;;
+    bps_bucket_only|bucket_only)
+      context_policy="phase"
+      decode_policy="fcfs"
+      emit_phase_metrics=1
+      prefill_scoring_mode="bucket_only"
+      ;;
+    bps_no_oldest_bonus|no_oldest_bonus)
+      context_policy="phase"
+      decode_policy="fcfs"
+      emit_phase_metrics=1
+      prefill_scoring_mode="no_oldest_bonus"
+      ;;
+    bps_age_bonus|age_bonus)
+      context_policy="phase"
+      decode_policy="fcfs"
+      emit_phase_metrics=1
+      prefill_scoring_mode="age_bonus"
       ;;
     kas)
       context_policy="fcfs"
@@ -199,6 +218,7 @@ start_server() {
     export PHASESERVE_PBC_DECODE_QUEUE_TARGET
     export PHASESERVE_PBC_SWAP_TARGET
     export PHASESERVE_DECODE_MAX_SWAPINS
+    export PHASESERVE_PREFILL_SCORING_MODE="${prefill_scoring_mode}"
     if [[ "${dynamic_pbc}" == "1" ]]; then
       unset PHASESERVE_PBC_DISABLE_DYNAMIC || true
     else
@@ -207,6 +227,7 @@ start_server() {
   else
     unset PHASESERVE_METRICS_PATH || true
     unset PHASESERVE_PBC_DISABLE_DYNAMIC || true
+    unset PHASESERVE_PREFILL_SCORING_MODE || true
   fi
 
   nohup "${PYTHON}" -m distserve.api_server.distserve_api_server \

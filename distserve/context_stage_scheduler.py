@@ -247,6 +247,10 @@ class ContextStageCostCompatibleScheduler(ContextStageFCFSScheduler):
         self.alpha = float(os.environ.get("PHASESERVE_PREFILL_ALPHA", "0.5"))
         self.beta = float(os.environ.get("PHASESERVE_PREFILL_BETA", "0.1"))
         self.gamma = float(os.environ.get("PHASESERVE_PREFILL_GAMMA", "1.0"))
+        self.scoring_mode = os.environ.get(
+            "PHASESERVE_PREFILL_SCORING_MODE",
+            "default",
+        ).lower()
         max_block_margin = int(os.environ.get(
             "PHASESERVE_PBC_MAX_BLOCK_MARGIN",
             str(max(1, int(self.block_manager.max_num_gpu_blocks * 0.10)))
@@ -329,12 +333,19 @@ class ContextStageCostCompatibleScheduler(ContextStageFCFSScheduler):
             ]) <= max(self._get_available_context_blocks() - block_margin, 0)
         )
 
-    def _score_batch(self, batch: BatchedRequests, protected_request: Request) -> float:
+    def _score_batch(
+        self,
+        batch: BatchedRequests,
+        protected_request: Request,
+        protected_wait: float,
+    ) -> float:
         if len(batch) == 0:
             return float("-inf")
         lengths = [req.get_input_len() for req in batch.requests]
         token_sum = sum(lengths)
         token_fill = token_sum / max(self.sched_config.max_tokens_per_batch, 1)
+        if self.scoring_mode == "bucket_only":
+            return token_fill
         pad_waste = (
             (max(lengths) * len(lengths) - token_sum)
             / max(self.sched_config.max_tokens_per_batch, 1)
@@ -344,6 +355,14 @@ class ContextStageCostCompatibleScheduler(ContextStageFCFSScheduler):
             / max(self._get_available_context_blocks(), 1)
         )
         oldest_bonus = 1.0 if protected_request in batch.requests else 0.0
+        if self.scoring_mode == "no_oldest_bonus":
+            oldest_bonus = 0.0
+        elif self.scoring_mode == "age_bonus":
+            oldest_bonus = (
+                min(protected_wait / max(self.dispatch_timeout_s, 1e-6), 1.0)
+                if protected_request in batch.requests
+                else 0.0
+            )
         budget = self.current_budget
         pressure_multiplier = 1.0 + (budget.rho_down if budget is not None else 0.0)
         return (
@@ -413,7 +432,7 @@ class ContextStageCostCompatibleScheduler(ContextStageFCFSScheduler):
         if candidate_batches:
             next_batch = max(
                 candidate_batches,
-                key=lambda batch: self._score_batch(batch, protected_request)
+                key=lambda batch: self._score_batch(batch, protected_request, protected_wait)
             )
 
         selected_ids = set([req.request_id for req in next_batch.requests])
@@ -437,6 +456,7 @@ class ContextStageCostCompatibleScheduler(ContextStageFCFSScheduler):
             "selected": len(next_batch.requests),
             "selected_prompt_tokens": next_batch.get_num_input_tokens(),
             "forced_oldest": protected_wait >= self.dispatch_timeout_s,
+            "scoring_mode": self.scoring_mode,
             "sched_time_s": sched_time_s,
             "budget": budget,
             "controller": self.pressure_controller.metrics(),
@@ -448,7 +468,7 @@ class ContextStageCostCompatibleScheduler(ContextStageFCFSScheduler):
         return (
             f"CostCompatible(max_batch_size={self.sched_config.max_batch_size}, "
             f"max_tokens_per_batch={self.sched_config.max_tokens_per_batch}, "
-            f"window_mult={self.window_multiplier})"
+            f"window_mult={self.window_multiplier}, scoring={self.scoring_mode})"
         )
 
     def print_status(self):

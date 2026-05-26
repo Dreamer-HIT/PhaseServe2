@@ -80,10 +80,73 @@ Smoke 配置：
 
 这意味着 BPS 仍值得保留，但需要改进后再进入最终论文主贡献。相比之下，KAS 的贡献目前更稳。
 
+## BPS 内部消融
+
+为了判断 BPS 的不稳定来自哪个 scoring 组件，新增了三个只用于内部诊断的变体：
+
+| Policy | 含义 | 论文定位 |
+|---|---|---|
+| `bps_bucket_only` | 只按 token bucket fill 选 batch，不考虑 padding waste、KV block risk 和 oldest protection | 内部诊断，不进最终主表 |
+| `bps_no_oldest_bonus` | 保留 BPS 的 fill/waste/risk score，但移除 fixed oldest bonus | 内部诊断，可作为 appendix 候选 |
+| `bps_age_bonus` | 把 fixed oldest bonus 改成随等待时间增长的连续 age bonus | 内部诊断，不进最终主表 |
+
+相关脚本：
+
+- `scripts/run_phase_bps_internal_sweep.sh`
+
+Smoke 结果目录：
+
+- `/root/data/phase_scheduler_results/bps_internal_smoke_20260526_223004`
+
+2-seed 结果目录：
+
+- `/root/data/phase_scheduler_results/bps_internal2_20260526_223425`
+
+配置：
+
+- 1p1d
+- LLaMA2-7B
+- `NUM_PROMPTS=96`
+- `SEEDS="0 1"`
+- `RATES="0 6 10"`
+- `POLICIES="fcfs bps bps_bucket_only bps_no_oldest_bonus bps_age_bonus"`
+- prompt/output mix 与上文 prefill-skew workload 相同
+
+### 聚合结果
+
+| Rate | Policy | Goodput req/s | SLO submitted | TTFT p90 | TTFT p99 | TPOT p90 | TPOT p99 | Output tok/s |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| 0 | fcfs | 5.455 | 0.823 | 11.262 | 12.541 | 0.0748 | 0.0852 | 324.5 |
+| 0 | bps | 6.045 | 0.932 | 8.883 | 12.085 | 0.0699 | 0.0772 | 322.6 |
+| 0 | bps_bucket_only | 5.279 | 0.880 | 10.213 | 12.728 | 0.0726 | 0.0818 | 299.0 |
+| 0 | bps_no_oldest_bonus | 5.791 | 0.911 | 9.835 | 12.003 | 0.0713 | 0.0968 | 315.5 |
+| 0 | bps_age_bonus | 5.377 | 0.833 | 10.987 | 12.938 | 0.0721 | 0.0872 | 318.3 |
+| 6 | fcfs | 5.504 | 1.000 | 0.521 | 0.760 | 0.0464 | 0.0732 | 275.9 |
+| 6 | bps | 5.538 | 1.000 | 0.473 | 0.704 | 0.0469 | 0.0643 | 277.7 |
+| 6 | bps_bucket_only | 5.594 | 1.000 | 0.453 | 0.885 | 0.0489 | 0.0733 | 280.6 |
+| 6 | bps_no_oldest_bonus | 5.536 | 1.000 | 0.467 | 0.726 | 0.0455 | 0.0649 | 277.6 |
+| 6 | bps_age_bonus | 5.577 | 1.000 | 0.422 | 0.929 | 0.0486 | 0.0730 | 279.8 |
+| 10 | fcfs | 6.396 | 1.000 | 3.423 | 4.078 | 0.0728 | 0.0871 | 319.1 |
+| 10 | bps | 6.459 | 1.000 | 3.811 | 4.576 | 0.0787 | 0.0916 | 322.9 |
+| 10 | bps_bucket_only | 6.543 | 1.000 | 3.457 | 4.929 | 0.0787 | 0.0900 | 326.9 |
+| 10 | bps_no_oldest_bonus | 6.363 | 1.000 | 3.651 | 5.128 | 0.0775 | 0.0917 | 318.2 |
+| 10 | bps_age_bonus | 6.478 | 1.000 | 3.798 | 4.567 | 0.0797 | 0.0908 | 323.8 |
+
+### 观察
+
+1. `bps` 默认 score 在 burst/rate0 下最均衡：goodput 相对 `fcfs` 提升约 `15.2%`，SLO submitted 提升 `10.9 pp`，TTFT p90 与 TPOT p99 均下降，output tok/s 基本持平。
+2. `bps_bucket_only` 能在 rate6/rate10 拿到最高 throughput，但 tail latency 不稳定，尤其 TTFT p99 在 rate6/rate10 都差于默认 `bps`。
+3. `bps_no_oldest_bonus` 在 rate0 的 TTFT p99 略好于默认 `bps`，但 TPOT p99 明显变差；说明 fixed oldest bonus 不是唯一问题，去掉它会把风险转移到 decode-side tail。
+4. `bps_age_bonus` 没有带来稳定收益，rate0/rate6 的 TTFT p99 都更差。当前 age bonus 公式不足以替代原有 oldest protection。
+5. 这些变体的价值主要是定位 BPS 设计空间，而不是构成最终论文 ablation。最终主文不应展示所有 variant，否则会把贡献叙事稀释成调参实验。
+
+### 结论
+
+BPS 的下一步不应只是继续调 `oldest_bonus`，而应把目标改成更明确的 dual-objective batch selection：在 prefill 端优化 token fill/padding waste 的同时，显式约束进入 decode 的 KV block risk 和尾部请求年龄。当前默认 BPS 仍是三种内部变体中最适合保留的版本，但其 claim 应限定为“在 prompt-skew、中等压力或 burst 场景下改善 prefill-side batching 与 SLO attainment”，不能写成普遍提升所有 tail 指标。
+
 ## 下一步
 
-1. 调整 BPS scoring：降低固定 `oldest_bonus`，改成连续 age-aware bonus，避免 protected oldest 在 burst 下过强牵引 batch。
-2. 增加 BPS 内部 ablation：`bucket_only`、`no_oldest_bonus`、`age_bonus`。
-3. 增加 prompt-bucket breakdown：分别统计短 prompt 与长 prompt 的 TTFT p90/p99，判断 BPS 是否在不同 prompt bucket 之间转移尾延迟。
-4. 在 rate6 附近做更细 sweep：`4/6/8`，确认 BPS 的有效压力区间。
-5. 如果改进后 BPS 仍只在窄区间有效，论文中应把 BPS 降级为辅助策略，把 KAS 作为主算法贡献。
+1. 增加 prompt-bucket breakdown：分别统计短 prompt 与长 prompt 的 TTFT p90/p99，判断 BPS 是否在不同 prompt bucket 之间转移尾延迟。
+2. 在 rate6 附近做更细 sweep：`4/6/8`，确认 BPS 的有效压力区间。
+3. 重新设计 BPS score，使 oldest/age 只作为 starvation guard，而不是主导 batch choice。
+4. 如果改进后 BPS 仍只在窄区间有效，论文中应把 BPS 定位为辅助机制，把 KAS 作为主算法贡献。

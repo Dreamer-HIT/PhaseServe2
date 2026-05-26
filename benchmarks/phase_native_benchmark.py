@@ -101,6 +101,10 @@ def summarize_phase_metrics(path: Optional[str]) -> Dict:
                 "prefill_token_budget": summarize([b.get("prefill_token_budget") for b in budgets]),
                 "prefill_block_margin": summarize([b.get("prefill_block_margin") for b in budgets]),
                 "forced_oldest": sum(1 for r in dispatch_rows if r.get("forced_oldest")),
+                "scoring_modes": {
+                    mode: sum(1 for r in dispatch_rows if r.get("scoring_mode") == mode)
+                    for mode in sorted({r.get("scoring_mode") for r in dispatch_rows if r.get("scoring_mode")})
+                },
                 "selected_prompt_tokens": summarize([r.get("selected_prompt_tokens") for r in dispatch_rows]),
             })
         if component == "decode":
