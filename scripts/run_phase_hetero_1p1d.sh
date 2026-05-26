@@ -22,6 +22,9 @@ HOST=${HOST:-127.0.0.1}
 SLO_TTFT_S=${SLO_TTFT_S:-10}
 SLO_TPOT_S=${SLO_TPOT_S:-1}
 POLICIES=${POLICIES:-"phase fcfs"}
+PROMPT_MIX=${PROMPT_MIX:-"64:0.50,256:0.30,512:0.20"}
+OUTPUT_MIX=${OUTPUT_MIX:-"64:0.30,128:0.30,256:0.20,512:0.15,1024:0.05"}
+DATASET_NAME=${DATASET_NAME:-"phaseserve-synthetic-heterogeneous"}
 PHASESERVE_PBC_RHO_LOW=${PHASESERVE_PBC_RHO_LOW:-0.20}
 PHASESERVE_PBC_RHO_HIGH=${PHASESERVE_PBC_RHO_HIGH:-0.40}
 PHASESERVE_PBC_DECODE_QUEUE_TARGET=${PHASESERVE_PBC_DECODE_QUEUE_TARGET:-4}
@@ -129,7 +132,10 @@ make_dataset() {
     --tokenizer "${MODEL_PATH}" \
     --output "${DATASET}" \
     --num-requests "${DATASET_SIZE}" \
-    --seed "${DATASET_SEED}"
+    --seed "${DATASET_SEED}" \
+    --prompt-mix "${PROMPT_MIX}" \
+    --output-mix "${OUTPUT_MIX}" \
+    --name "${DATASET_NAME}"
 }
 
 start_server() {

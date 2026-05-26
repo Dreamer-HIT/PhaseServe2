@@ -10,6 +10,9 @@ NUM_PROMPTS=${NUM_PROMPTS:-48}
 DATASET_SIZE=${DATASET_SIZE:-${NUM_PROMPTS}}
 PROCESS_NAME=${PROCESS_NAME:-poisson}
 POLICIES=${POLICIES:-"phase fcfs"}
+PROMPT_MIX=${PROMPT_MIX:-"64:0.50,256:0.30,512:0.20"}
+OUTPUT_MIX=${OUTPUT_MIX:-"64:0.30,128:0.30,256:0.20,512:0.15,1024:0.05"}
+DATASET_NAME=${DATASET_NAME:-"phaseserve-synthetic-heterogeneous"}
 
 mkdir -p "${SWEEP_ROOT}"
 cd "${REPO_DIR}"
@@ -29,6 +32,9 @@ for seed in ${SEEDS}; do
       REQUEST_RATE="${rate}" \
       PROCESS_NAME="${PROCESS_NAME}" \
       POLICIES="${POLICIES}" \
+      PROMPT_MIX="${PROMPT_MIX}" \
+      OUTPUT_MIX="${OUTPUT_MIX}" \
+      DATASET_NAME="${DATASET_NAME}" \
       ./scripts/run_phase_hetero_1p1d.sh
   done
 done
