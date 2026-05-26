@@ -1,5 +1,7 @@
 from abc import ABC, abstractmethod
 import copy
+import os
+import time
 from typing import List, Callable, Tuple
 
 from distserve.config import ContextStageSchedConfig, ParallelConfig
@@ -199,6 +201,205 @@ class ContextStageFCFSScheduler(ContextStageScheduler):
     def print_status(self):
         logger.info(f"(context) {len(self.waiting_queue)} waiting, {len(self.unaccepted_queue)} finished but unaccepted, {self.num_on_fly_request_block} blocks occupied by on-the-fly requests")
 
+
+class ContextStageCostCompatibleScheduler(ContextStageFCFSScheduler):
+    """
+    Bounded-window cost-compatible prefill scheduler.
+
+    This is the minimal PS-Prefill implementation used for controlled
+    experiments. It only reorders requests already present in a bounded prefix
+    of the waiting queue, groups them by prompt length, and dispatches the best
+    resource-feasible batch. The oldest request is protected after a bounded
+    wait to avoid starving long prompts.
+    """
+
+    def __init__(
+        self,
+        sched_config: ContextStageSchedConfig,
+        parallel_config: ParallelConfig,
+        block_manager: BlockManager):
+
+        assert sched_config.policy in [
+            "cost-compatible",
+            "cost-compatible-prefill",
+            "phase",
+        ], f"can not initialize a cost-compatible scheduler with policy {sched_config.policy}"
+        self.sched_config = sched_config
+        self.waiting_queue = []
+        self.parallel_config: List[Request] = copy.deepcopy(parallel_config)
+        self.block_manager = block_manager
+        self.unaccepted_queue: List[Request] = []
+        self.num_on_fly_request_block = 0
+
+        self.window_multiplier = int(os.environ.get("PHASESERVE_PREFILL_WINDOW_MULT", "4"))
+        self.dispatch_timeout_s = float(os.environ.get("PHASESERVE_PREFILL_TIMEOUT_S", "0.25"))
+        self.bucket_bounds = [
+            int(x) for x in os.environ.get(
+                "PHASESERVE_PREFILL_BUCKETS",
+                "256,512,1024,2048,4096"
+            ).split(",") if x
+        ]
+        self.alpha = float(os.environ.get("PHASESERVE_PREFILL_ALPHA", "0.5"))
+        self.beta = float(os.environ.get("PHASESERVE_PREFILL_BETA", "0.1"))
+        self.gamma = float(os.environ.get("PHASESERVE_PREFILL_GAMMA", "1.0"))
+
+        self.num_dispatches = 0
+        self.total_sched_time_s = 0.0
+        self.num_oldest_forced = 0
+
+    def add_request(self, request: Request) -> None:
+        request.phaseserve_context_enqueue_time = time.perf_counter()
+        self.waiting_queue.append(request)
+
+    def _get_wait_time(self, request: Request) -> float:
+        return time.perf_counter() - getattr(
+            request,
+            "phaseserve_context_enqueue_time",
+            request.arrival_time,
+        )
+
+    def _get_bucket_id(self, request: Request) -> int:
+        length = request.get_input_len()
+        for idx, bound in enumerate(self.bucket_bounds):
+            if length <= bound:
+                return idx
+        return len(self.bucket_bounds)
+
+    def _get_available_context_blocks(self) -> int:
+        reserved_blocks = sum([
+            self._get_block_needed(len(req.prompt_token_ids))
+            for req in self.unaccepted_queue
+        ]) + self.num_on_fly_request_block
+        return max(self.block_manager.max_num_gpu_blocks - reserved_blocks, 0)
+
+    def _is_feasible(self, batch: BatchedRequests, request: Request) -> bool:
+        return (
+            len(batch) < self.sched_config.max_batch_size
+        ) and (
+            batch.get_num_input_tokens()
+            + request.get_num_input_tokens()
+            <= self.sched_config.max_tokens_per_batch
+        ) and (
+            sum([
+                self._get_block_needed(req.get_input_len())
+                for req in batch.requests + [request]
+            ]) <= self._get_available_context_blocks()
+        )
+
+    def _score_batch(self, batch: BatchedRequests, protected_request: Request) -> float:
+        if len(batch) == 0:
+            return float("-inf")
+        lengths = [req.get_input_len() for req in batch.requests]
+        token_sum = sum(lengths)
+        token_fill = token_sum / max(self.sched_config.max_tokens_per_batch, 1)
+        pad_waste = (
+            (max(lengths) * len(lengths) - token_sum)
+            / max(self.sched_config.max_tokens_per_batch, 1)
+        )
+        block_risk = (
+            sum([self._get_block_needed(req.get_input_len()) for req in batch.requests])
+            / max(self._get_available_context_blocks(), 1)
+        )
+        oldest_bonus = 1.0 if protected_request in batch.requests else 0.0
+        return token_fill - self.alpha * pad_waste - self.beta * block_risk + self.gamma * oldest_bonus
+
+    def _ordered_bucket_requests(self, requests: List[Request], protected_request: Request) -> List[Request]:
+        if not requests:
+            return []
+        median_len = sorted([req.get_input_len() for req in requests])[len(requests) // 2]
+        return sorted(
+            requests,
+            key=lambda req: (
+                req is not protected_request,
+                -self._get_wait_time(req),
+                abs(req.get_input_len() - median_len),
+                req.request_id,
+            ),
+        )
+
+    def get_next_batch_and_pop(self) -> BatchedRequests:
+        sched_start = time.perf_counter()
+        next_batch = BatchedRequests()
+        if len(self.waiting_queue) == 0:
+            return next_batch
+
+        window_size = max(
+            self.sched_config.max_batch_size * self.window_multiplier,
+            self.sched_config.max_batch_size,
+            1,
+        )
+        candidate_window = self.waiting_queue[:window_size]
+        protected_request = candidate_window[0]
+        protected_wait = self._get_wait_time(protected_request)
+
+        buckets = {}
+        for request in candidate_window:
+            buckets.setdefault(self._get_bucket_id(request), []).append(request)
+
+        candidate_batches = []
+        for _, bucket_requests in sorted(buckets.items()):
+            batch = BatchedRequests()
+            for request in self._ordered_bucket_requests(bucket_requests, protected_request):
+                if self._is_feasible(batch, request):
+                    batch.add_request(request)
+            if len(batch) > 0:
+                candidate_batches.append(batch)
+
+        if protected_wait >= self.dispatch_timeout_s:
+            protected_batches = [
+                batch for batch in candidate_batches
+                if protected_request in batch.requests
+            ]
+            if protected_batches:
+                candidate_batches = protected_batches
+            else:
+                forced_batch = BatchedRequests()
+                if self._is_feasible(forced_batch, protected_request):
+                    forced_batch.add_request(protected_request)
+                    candidate_batches = [forced_batch]
+            self.num_oldest_forced += 1
+
+        if candidate_batches:
+            next_batch = max(
+                candidate_batches,
+                key=lambda batch: self._score_batch(batch, protected_request)
+            )
+
+        selected_ids = set([req.request_id for req in next_batch.requests])
+        if selected_ids:
+            self.waiting_queue = [
+                req for req in self.waiting_queue
+                if req.request_id not in selected_ids
+            ]
+
+        self.num_on_fly_request_block += sum([
+            self._get_block_needed(req.get_input_len())
+            for req in next_batch.requests
+        ])
+        self.num_dispatches += 1
+        self.total_sched_time_s += time.perf_counter() - sched_start
+
+        return next_batch
+
+    def __repr__(self) -> str:
+        return (
+            f"CostCompatible(max_batch_size={self.sched_config.max_batch_size}, "
+            f"max_tokens_per_batch={self.sched_config.max_tokens_per_batch}, "
+            f"window_mult={self.window_multiplier})"
+        )
+
+    def print_status(self):
+        avg_sched_ms = (
+            self.total_sched_time_s / max(self.num_dispatches, 1) * 1000.0
+        )
+        logger.info(
+            f"(context-cost-compatible) {len(self.waiting_queue)} waiting, "
+            f"{len(self.unaccepted_queue)} finished but unaccepted, "
+            f"{self.num_on_fly_request_block} blocks occupied by on-the-fly requests, "
+            f"avg_sched_ms={avg_sched_ms:.3f}, forced_oldest={self.num_oldest_forced}"
+        )
+
+
 def get_context_stage_scheduler(
     sched_config: ContextStageSchedConfig,
     parallel_config: ParallelConfig,
@@ -206,6 +407,8 @@ def get_context_stage_scheduler(
 ) -> ContextStageScheduler:
     if sched_config.policy == "fcfs":
         return ContextStageFCFSScheduler(sched_config, parallel_config, block_manager)
+    elif sched_config.policy in ["cost-compatible", "cost-compatible-prefill", "phase"]:
+        return ContextStageCostCompatibleScheduler(sched_config, parallel_config, block_manager)
     else:
         raise NotImplementedError(f"Unknown context scheduler policy {sched_config.policy}")
     

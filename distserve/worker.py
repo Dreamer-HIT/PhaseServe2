@@ -265,6 +265,11 @@ class ParaWorker:
             self.k_cache,
             self.v_cache
         )
+        # The migration op can enqueue device work before returning. The decode
+        # scheduler treats the Ray call as the readiness boundary, so make that
+        # boundary real: do not expose the migrated request to decode until its
+        # KV blocks are visible on the decoding GPU.
+        torch.cuda.synchronize()
         
     def swap_blocks(
         self,

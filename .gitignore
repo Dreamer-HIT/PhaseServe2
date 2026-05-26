@@ -178,3 +178,7 @@ cython_debug/
 #.idea/
 .DS_Store
 .idea
+
+# Runtime crash dumps and local experiment artifacts
+core.*
+/backups/

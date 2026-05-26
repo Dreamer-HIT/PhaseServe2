@@ -1,5 +1,8 @@
 from abc import ABC, abstractmethod
 import copy
+import math
+import os
+import time
 from typing import List, Callable, Tuple
 import warnings
 import torch
@@ -103,9 +106,12 @@ class DecodingStageFCFSScheduler(DecodingStageScheduler):
         block_manager: BlockManager,
         engine_migrate_block_callback: Callable,
     ):
-        assert (
-            sched_config.policy == "fcfs"
-        ), f"can not initialize a FCFS scheduler with policy {sched_config.policy}"
+        assert sched_config.policy in [
+            "fcfs",
+            "kv-aware-las",
+            "kv-aware-las-decode",
+            "phase",
+        ], f"can not initialize a decoding scheduler with policy {sched_config.policy}"
         self.sched_config = sched_config
         # If the request has not been accepted (i.e. it still resides in the "bridge" queu
         # and its block are still on the context stage engine's side), then it will be put
@@ -258,6 +264,222 @@ class DecodingStageFCFSScheduler(DecodingStageScheduler):
                 self.waiting_queue.append(migrating_req.req)
             else:
                 break
+
+
+class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
+    """
+    KV-aware least-attained-service decode scheduler.
+
+    This minimal PS-Decode implementation targets the 1p1d experimental setup.
+    It rebuilds the active decode batch at iteration boundaries, prioritizing
+    requests with fewer generated tokens while preferring GPU-resident KV state
+    inside the same attained-service level. A skip counter provides a bounded
+    fairness signal for requests repeatedly bypassed by the scheduler.
+    """
+
+    def __init__(
+        self,
+        sched_config: DecodingStageSchedConfig,
+        parallel_config: ParallelConfig,
+        block_manager: BlockManager,
+        engine_migrate_block_callback: Callable,
+    ):
+        assert sched_config.policy in [
+            "kv-aware-las",
+            "kv-aware-las-decode",
+            "phase",
+        ], f"can not initialize a KV-aware LAS scheduler with policy {sched_config.policy}"
+        super().__init__(
+            sched_config,
+            parallel_config,
+            block_manager,
+            engine_migrate_block_callback,
+        )
+        self.skip_threshold = int(os.environ.get("PHASESERVE_DECODE_SKIP_THRESHOLD", "8"))
+        self.max_level = int(os.environ.get("PHASESERVE_DECODE_MAX_LEVEL", "16"))
+        self.scan_multiplier = int(os.environ.get("PHASESERVE_DECODE_SCAN_MULT", "4"))
+        self.max_swap_ins_per_iter = int(os.environ.get("PHASESERVE_DECODE_MAX_SWAPINS", "1"))
+
+        self.consecutive_skips = {}
+        self.num_iterations = 0
+        self.total_sched_time_s = 0.0
+        self.total_selected = 0
+        self.total_starved_selected = 0
+        self.total_swap_ins = 0
+
+        if self.parallel_config.pipeline_parallel_size != 1:
+            logger.warning(
+                "DecodingStageKVAwareLASScheduler is intended for pp=1. "
+                "Falling back to FCFS behavior for pipeline-parallel decode."
+            )
+
+    def _is_resident(self, request: Request) -> bool:
+        return self.block_manager.get_location(request.request_id) == BlockLocation.GPU
+
+    def _get_attained_level(self, request: Request) -> int:
+        output_len = max(request.get_output_len(), 0)
+        if output_len <= 0:
+            return 0
+        return min(output_len.bit_length(), self.max_level)
+
+    def _is_starved(self, request: Request) -> bool:
+        return self.consecutive_skips.get(request.request_id, 0) >= self.skip_threshold
+
+    def _ready_sort_key(self, request: Request):
+        return (
+            self._get_attained_level(request),
+            not self._is_starved(request),
+            not self._is_resident(request),
+            getattr(request, "phaseserve_decode_ready_time", request.arrival_time),
+            request.request_id,
+        )
+
+    def _dedup_ready_requests(self, requests: List[Request]) -> List[Request]:
+        seen = set()
+        deduped = []
+        for request in requests:
+            if request.request_id in seen or request.is_finished:
+                continue
+            seen.add(request.request_id)
+            deduped.append(request)
+        return deduped
+
+    def _get_append_blocks_needed_safe(self, request: Request) -> int:
+        if self.block_manager.get_location(request.request_id) != BlockLocation.GPU:
+            return 0
+        return max(self.block_manager.get_num_append_blocks_needed(request), 0)
+
+    def _can_add_to_las_batch(self, batch: BatchedRequests, request: Request, swap_ins_used: int) -> bool:
+        if len(batch) >= self.sched_config.max_batch_size:
+            return False
+        if batch.get_num_input_tokens() + request.get_num_input_tokens() > self.sched_config.max_tokens_per_batch:
+            return False
+
+        if self._is_resident(request):
+            append_needed = self._get_append_blocks_needed_safe(request)
+            selected_append_needed = sum([
+                self._get_append_blocks_needed_safe(req)
+                for req in batch.requests
+                if self._is_resident(req)
+            ])
+            return append_needed + selected_append_needed <= self.block_manager.get_num_avail_gpu_blocks()
+
+        if swap_ins_used >= self.max_swap_ins_per_iter:
+            return False
+        blocks_to_swap_in = self.block_manager.get_allocated_num_blocks(request.request_id)
+        return blocks_to_swap_in <= self.block_manager.get_num_avail_gpu_blocks()
+
+    def _requeue_unselected_requests(self, ready_requests: List[Request], selected_ids: set):
+        self.waiting_queue = []
+        self.swapped_queue = []
+        for request in ready_requests:
+            if request.request_id in selected_ids or request.is_finished:
+                continue
+            self.consecutive_skips[request.request_id] = (
+                self.consecutive_skips.get(request.request_id, 0) + 1
+            )
+            if self.block_manager.get_location(request.request_id) == BlockLocation.CPU:
+                self.swapped_queue.append(request)
+            else:
+                self.waiting_queue.append(request)
+
+    def get_next_batch(self) -> BatchedRequests:
+        if self.parallel_config.pipeline_parallel_size != 1:
+            return super().get_next_batch()
+
+        sched_start = time.perf_counter()
+        self.cur_index = 0
+
+        ready_requests = self._dedup_ready_requests(
+            self.batch_queues[self.cur_index].requests
+            + self.waiting_queue
+            + self.swapped_queue
+        )
+        self.batch_queues[self.cur_index] = BatchedRequests()
+
+        if not ready_requests:
+            self.num_iterations += 1
+            self.total_sched_time_s += time.perf_counter() - sched_start
+            return self.batch_queues[self.cur_index]
+
+        ordered_requests = sorted(ready_requests, key=self._ready_sort_key)
+        scan_limit = max(
+            self.sched_config.max_batch_size * self.scan_multiplier,
+            self.sched_config.max_batch_size,
+            1,
+        )
+
+        selected_ids = set()
+        swap_ins_used = 0
+        selected_starved = 0
+        for request in ordered_requests[:scan_limit]:
+            if self._can_add_to_las_batch(self.batch_queues[self.cur_index], request, swap_ins_used):
+                if not self._is_resident(request):
+                    logger.info("KV-aware LAS swap-in triggered")
+                    self.block_manager.swap_in_requests([request])
+                    swap_ins_used += 1
+                    self.total_swap_ins += 1
+                if self._is_starved(request):
+                    selected_starved += 1
+                self.batch_queues[self.cur_index].add_request(request)
+                selected_ids.add(request.request_id)
+                self.consecutive_skips[request.request_id] = 0
+                if len(self.batch_queues[self.cur_index]) >= self.sched_config.max_batch_size:
+                    break
+
+        self._requeue_unselected_requests(ready_requests, selected_ids)
+
+        self.num_iterations += 1
+        self.total_sched_time_s += time.perf_counter() - sched_start
+        self.total_selected += len(selected_ids)
+        self.total_starved_selected += selected_starved
+
+        return self.batch_queues[self.cur_index]
+
+    def pop_finished_requests(self) -> List[Request]:
+        finished = super().pop_finished_requests()
+        for request in finished:
+            self.consecutive_skips.pop(request.request_id, None)
+        return finished
+
+    async def post_process(self) -> None:
+        def should_accept(migrating_req: MigratingRequest) -> bool:
+            waiting_blocks = sum([
+                self._get_block_needed(req.get_input_len() + req.get_output_len())
+                for req in self.waiting_queue
+            ])
+            return waiting_blocks < self.block_manager.max_num_gpu_blocks * self.sched_config.waiting_block_prop_threshold \
+                and self._get_block_needed(len(migrating_req.req.prompt_token_ids)) <= self.block_manager.get_num_avail_gpu_blocks()
+
+        while len(self.unaccepted_queue) > 0:
+            migrating_req = self.unaccepted_queue[0]
+            if should_accept(migrating_req):
+                self.unaccepted_queue.pop(0)
+                await self.engine_migrate_block_callback(migrating_req)
+                migrating_req.req.phaseserve_decode_ready_time = time.perf_counter()
+                self.waiting_queue.append(migrating_req.req)
+                self.consecutive_skips.setdefault(migrating_req.req.request_id, 0)
+            else:
+                break
+
+    def __repr__(self) -> str:
+        return (
+            f"KVAwareLAS(max_batch_size={self.sched_config.max_batch_size}, "
+            f"max_tokens_per_batch={self.sched_config.max_tokens_per_batch}, "
+            f"skip_threshold={self.skip_threshold})"
+        )
+
+    def print_status(self) -> None:
+        avg_sched_ms = (
+            self.total_sched_time_s / max(self.num_iterations, 1) * 1000.0
+        )
+        logger.info(
+            f"(decoding-kv-aware-las) {len(self.unaccepted_queue)} unaccepted, "
+            f"{len(self.waiting_queue)} waiting, {len(self.swapped_queue)} swapped, "
+            f"{self.get_processing_num_requests()} processing, "
+            f"avg_sched_ms={avg_sched_ms:.3f}, selected={self.total_selected}, "
+            f"starved_selected={self.total_starved_selected}, swap_ins={self.total_swap_ins}"
+        )
     
 def get_decoding_stage_scheduler(
     sched_config: DecodingStageSchedConfig,
@@ -267,6 +489,8 @@ def get_decoding_stage_scheduler(
 ) -> DecodingStageScheduler:
     if sched_config.policy == "fcfs":
         return DecodingStageFCFSScheduler(sched_config, parallel_config, block_manager, engine_migrate_block_callback)
+    elif sched_config.policy in ["kv-aware-las", "kv-aware-las-decode", "phase"]:
+        return DecodingStageKVAwareLASScheduler(sched_config, parallel_config, block_manager, engine_migrate_block_callback)
     else:
         raise NotImplementedError(
             f"scheduler policy {sched_config.policy} is not supported"

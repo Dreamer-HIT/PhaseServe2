@@ -104,6 +104,14 @@ class SingleStageLLMEngine(ABC):
             tokenizer_mode=model_config.tokenizer_mode,
             trust_remote_code=model_config.trust_remote_code,
         )
+        self._tokenizer_vocab_size = len(self.tokenizer)
+        self._fallback_token_id = self.tokenizer.eos_token_id
+        if (
+            self._fallback_token_id is None
+            or self._fallback_token_id < 0
+            or self._fallback_token_id >= self._tokenizer_vocab_size
+        ):
+            self._fallback_token_id = 0
 
         self.placement_groups = placement_groups
         
@@ -139,6 +147,33 @@ class SingleStageLLMEngine(ABC):
 
         logger.info(f"Scheduler: {self.scheduler}")
         logger.info(f"Block manager: {self.block_manager}")
+
+    def _sanitize_generated_token_ids(self, generated_tokens_ids: List[int]) -> List[int]:
+        sanitized_token_ids = []
+        for token_id in generated_tokens_ids:
+            try:
+                token_id = int(token_id)
+            except Exception:
+                logger.warning(
+                    "%s worker returned a non-integer token id %r; replacing with %d",
+                    self.stage.name,
+                    token_id,
+                    self._fallback_token_id,
+                )
+                sanitized_token_ids.append(self._fallback_token_id)
+                continue
+
+            if token_id < 0 or token_id >= self._tokenizer_vocab_size:
+                logger.warning(
+                    "%s worker returned out-of-vocab token id %d (vocab=%d); replacing with %d",
+                    self.stage.name,
+                    token_id,
+                    self._tokenizer_vocab_size,
+                    self._fallback_token_id,
+                )
+                token_id = self._fallback_token_id
+            sanitized_token_ids.append(token_id)
+        return sanitized_token_ids
 
 
     async def _init_workers(self):
@@ -352,7 +387,9 @@ class ContextStageLLMEngine(SingleStageLLMEngine):
                 self.batches_in_pipeline.pop(0)
                 self.batches_ret_futures.pop(0)
             else:
-                generated_tokens_ids = await self.batches_ret_futures[0]
+                generated_tokens_ids = self._sanitize_generated_token_ids(
+                    await self.batches_ret_futures[0]
+                )
                     
                 end_time = time.time()
                 generated_tokens = []
@@ -597,7 +634,9 @@ class DecodingStageLLMEngine(SingleStageLLMEngine):
                 self.batches_in_pipeline.pop(0)
                 self.batches_ret_futures.pop(0)
             else:
-                generated_tokens_ids = await self.batches_ret_futures[0]
+                generated_tokens_ids = self._sanitize_generated_token_ids(
+                    await self.batches_ret_futures[0]
+                )
                 end_time = time.time()
                 generated_tokens = []
                 for gen_token_id in generated_tokens_ids:
