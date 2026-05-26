@@ -6,23 +6,23 @@
 
 ## 结论先行
 
-现有初稿的方法论**有潜力，但还不足以支撑系统顶会投稿**。
+当前方法论已经从“多个调度启发式的组合”收敛为一个更清楚的系统论文方向：**PhaseServe = pressure-budgeted phase scheduling**。它包含一个核心控制器 PBC，以及两个受预算约束的执行策略 BPS 和 KAS。
 
-最值得保留的核心判断是：
+按系统顶会标准，这一版的判断是：
 
-> 在 prefill 和 decode 已经被解耦之后，系统瓶颈不再只是两个阶段之间的资源干扰，而是两个阶段内部的调度目标和可观测信息结构不同。prefill 的主导工作量在执行前基本可知，而 decode 的总工作量只能在线暴露。因此，二者不应该继续使用相同的 FCFS 式调度策略。
+> PhaseServe 具备**中等顶会潜力**，但还没有达到可以直接投稿 OSDI/SOSP/NSDI/EuroSys/ASPLOS/ATC 的方法论完成度。当前最强的论文主线不是“我们实现了若干 scheduler”，而是“prefill-decode 解耦之后仍然存在 decode-side pressure 向 prefill 反向传播的问题；PhaseServe 将这种运行时压力转化为 admission budget，并让 prefill/decode 在该预算下执行阶段特化调度”。
 
-这个 insight 是强的，值得作为论文主线。但当前初稿的问题是 claim 太宽，系统边界太大，方法论里混合了几个尚未充分实现和验证的方向：
+这比初稿更聚焦，也更容易实验验证。初稿中应该弱化或移出主贡献的方向包括：
 
 1. 全局 phase controller 和 topology-aware routing。
 2. 主动式 KV-state manager，包括 residency、prefetch、cold-state eviction。
 3. 大规模实验结果和提升幅度，但这些目前还没有和真实实现、真实硬件、真实 workload 严格绑定。
 
-如果目标是系统顶会，PhaseServe 应该被收窄成一个更精确、更可实现、更容易做消融的系统贡献：
+当前版本应坚持的核心贡献是：
 
-> PhaseServe 是一个面向 prefill-decode 解耦式 LLM serving 的信息不对称调度系统。它在 DistServe 之上引入 phase-specialized local schedulers 和 memory-aware admission，而不是在尚未充分实现前声称构建了完整的新型全局控制平面。
+> PhaseServe 是一个面向 prefill-decode 解耦式 LLM serving 的 pressure-budgeted online scheduling framework。PBC 将 decode-side queue、KV block、bridge queue 和 swap pressure 映射为 admission budget；BPS 在该 budget 下执行 known-size prefill shaping；KAS 在该 budget 下执行 unknown-size KV-constrained decode active-set shaping。
 
-换句话说，当前方法论的种子足够好，但论文需要从“我做了一个包罗万象的 serving 系统”改成“我识别并解决了 disaggregated LLM serving 中一个被低估的核心调度问题”。
+但是，这一版仍有一个关键短板：**PBC 还必须从 watermark-style backpressure 升级为有原则的 pressure-to-budget controller**。如果 PBC 只是手调阈值，BPS 像 bucket batching，KAS 像 LAS/MLFQ 变体，那么 reviewer 仍可能把 PhaseServe 评价为 heuristic glue。下一步方法论优化应优先补强 PBC 的 pressure vector、budget vector、归一化方法、monotonic mapping、hysteresis/smoothing 和 bounded-pressure 论证。
 
 ## 推荐论文主张
 
