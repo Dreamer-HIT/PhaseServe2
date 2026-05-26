@@ -56,8 +56,38 @@
 
 ## 下一步
 
-1. 多 seed 重复 `hetero_1p1d`，报告均值、标准差、置信区间。
-2. 加 arrival-rate sweep：burst、0.5 rps、1 rps、2 rps、4 rps，观察 SLO goodput 曲线。
-3. 加 SLO sensitivity：TTFT 5/10/20s 与 TPOT 0.05/0.1/0.2/1.0s。
-4. 继续优化 BPS：把 forced-oldest 从二值触发改成 age-aware score，降低 TTFT p99。
-5. 继续优化 KAS victim selection：加入 remaining-output 与 KV footprint，减少不必要 swap。
+## Sweep 初步结果
+
+第一版 sweep 使用 2 个 seed、3 个 arrival rates：`0`、`1`、`2` rps。结果目录：
+
+- `/root/data/phase_scheduler_results/hetero_1p1d_sweep_20260526_184027`
+
+按 rate 聚合均值：
+
+| Rate | Policy | Goodput req/s | SLO submitted | TTFT p99 | TPOT p95 | TPOT p99 |
+|---:|---|---:|---:|---:|---:|---:|
+| 0 | Phase | 1.602 | 0.979 | 9.896 | 0.137 | 0.148 |
+| 0 | FCFS | 1.472 | 0.969 | 9.501 | 0.150 | 0.161 |
+| 1 | Phase | 0.859 | 1.000 | 0.072 | 0.0159 | 0.0160 |
+| 1 | FCFS | 0.860 | 1.000 | 0.070 | 0.0157 | 0.0158 |
+| 2 | Phase | 1.461 | 1.000 | 0.077 | 0.0189 | 0.0221 |
+| 2 | FCFS | 1.467 | 1.000 | 0.066 | 0.0254 | 0.0312 |
+
+关键观察：
+
+- Burst/rate0 是 Phase 的主要收益区：goodput 平均提升约 `0.130 req/s`，SLO submitted 提升约 `1.0 pp`，TPOT p99 降低约 `7.7%`。
+- 轻载 rate1/rate2 下，两边 SLO 都是 1.0，Phase 的 goodput 与 FCFS 基本相同。
+- rate2 下 Phase 的 TPOT p99 低于 FCFS，但 TTFT p99 略高。这说明 KAS 对 decode tail 有帮助，但 BPS/context 侧还需要进一步压 TTFT tail。
+- seed 间差异明显，说明后续至少需要 5 个 seed，并报告置信区间。
+
+新增脚本：
+
+- `scripts/run_phase_hetero_sweep.sh`
+
+## 下一步
+
+1. 扩展到 5 个 seed，保留 rate0/rate1/rate2，并增加高压 rate4。
+2. 加 SLO sensitivity：TTFT 5/10/20s 与 TPOT 0.05/0.1/0.2/1.0s。
+3. 继续优化 BPS：把 forced-oldest 从二值触发改成 age-aware score，降低 TTFT p99。
+4. 继续优化 KAS victim selection：加入 remaining-output 与 KV footprint，减少不必要 swap。
+5. 将 sweep 聚合脚本升级为自动输出均值、标准差、paired delta 与 Markdown 表格。

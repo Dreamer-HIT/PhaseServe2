@@ -8,6 +8,8 @@ RESULT_ROOT=${RESULT_ROOT:-/root/data/phase_scheduler_results/hetero_1p1d_$(date
 DATASET=${DATASET:-${RESULT_ROOT}/hetero_synthetic.marshal}
 NUM_PROMPTS=${NUM_PROMPTS:-48}
 DATASET_SIZE=${DATASET_SIZE:-${NUM_PROMPTS}}
+DATASET_SEED=${DATASET_SEED:-0}
+BENCHMARK_SEED=${BENCHMARK_SEED:-${DATASET_SEED}}
 REQUEST_RATE=${REQUEST_RATE:-0}
 PROCESS_NAME=${PROCESS_NAME:-uniform}
 MAX_CONNECTIONS=${MAX_CONNECTIONS:-${NUM_PROMPTS}}
@@ -126,7 +128,7 @@ make_dataset() {
     --tokenizer "${MODEL_PATH}" \
     --output "${DATASET}" \
     --num-requests "${DATASET_SIZE}" \
-    --seed 0
+    --seed "${DATASET_SEED}"
 }
 
 start_server() {
@@ -184,6 +186,7 @@ run_policy() {
     --dataset "${DATASET}" \
     --num-prompts "${NUM_PROMPTS}" --sample-mode first \
     --request-rate "${REQUEST_RATE}" --process-name "${PROCESS_NAME}" \
+    --seed "${BENCHMARK_SEED}" \
     --max-connections "${MAX_CONNECTIONS}" --timeout-s "${TIMEOUT_S}" \
     --max-total-tokens "${MAX_TOTAL_TOKENS}" \
     --num-gpus 2 \
