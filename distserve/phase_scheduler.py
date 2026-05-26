@@ -73,7 +73,13 @@ class PressureBudgetController:
         self.min_prefill_block_margin = _env_int("PHASESERVE_PBC_MIN_BLOCK_MARGIN", 0)
 
         self.max_decode_scan = max(max_decode_scan, 0)
-        self.min_decode_scan = _env_int("PHASESERVE_PBC_MIN_DECODE_SCAN", 1)
+        default_min_decode_scan = int(round(
+            self.max_decode_scan * _env_float("PHASESERVE_PBC_MIN_DECODE_SCAN_FRAC", 0.75)
+        ))
+        self.min_decode_scan = min(
+            self.max_decode_scan,
+            max(_env_int("PHASESERVE_PBC_MIN_DECODE_SCAN", default_min_decode_scan), 1),
+        )
         self.max_decode_swap_budget = max(max_decode_swap_budget, 0)
         self.min_decode_swap_budget = _env_int("PHASESERVE_PBC_MIN_SWAP_BUDGET", 0)
 

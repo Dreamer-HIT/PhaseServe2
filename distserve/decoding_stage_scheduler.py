@@ -421,13 +421,13 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
         if batch.get_num_input_tokens() + request.get_num_input_tokens() > self.sched_config.max_tokens_per_batch:
             return False
 
+        selected_append_needed = sum([
+            self._get_append_blocks_needed_safe(req)
+            for req in batch.requests
+            if self._is_resident(req)
+        ])
         if self._is_resident(request):
             append_needed = self._get_append_blocks_needed_safe(request)
-            selected_append_needed = sum([
-                self._get_append_blocks_needed_safe(req)
-                for req in batch.requests
-                if self._is_resident(req)
-            ])
             return append_needed + selected_append_needed <= self.block_manager.get_num_avail_gpu_blocks()
 
         swap_budget = (
@@ -438,7 +438,7 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
         if swap_ins_used >= swap_budget:
             return False
         blocks_to_swap_in = self.block_manager.get_allocated_num_blocks(request.request_id)
-        return blocks_to_swap_in <= self.block_manager.get_num_avail_gpu_blocks()
+        return blocks_to_swap_in + selected_append_needed <= self.block_manager.get_num_avail_gpu_blocks()
 
     def _evict_resident_requests_for_blocks(
         self,
