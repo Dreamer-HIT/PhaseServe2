@@ -144,9 +144,10 @@ Smoke 结果目录：
 
 BPS 的下一步不应只是继续调 `oldest_bonus`，而应把目标改成更明确的 dual-objective batch selection：在 prefill 端优化 token fill/padding waste 的同时，显式约束进入 decode 的 KV block risk 和尾部请求年龄。当前默认 BPS 仍是三种内部变体中最适合保留的版本，但其 claim 应限定为“在 prompt-skew、中等压力或 burst 场景下改善 prefill-side batching 与 SLO attainment”，不能写成普遍提升所有 tail 指标。
 
+更细的 bucket-level 结果见 `docs/bucket_breakdown_validation.md`。该结果显示 BPS 的 TTFT 收益主要集中在短/中 prompt bucket，最长 prompt bucket 仍可能退化，因此后续 BPS 优化必须加入更强的 long-prompt starvation guard。
+
 ## 下一步
 
-1. 增加 prompt-bucket breakdown：分别统计短 prompt 与长 prompt 的 TTFT p90/p99，判断 BPS 是否在不同 prompt bucket 之间转移尾延迟。
-2. 在 rate6 附近做更细 sweep：`4/6/8`，确认 BPS 的有效压力区间。
-3. 重新设计 BPS score，使 oldest/age 只作为 starvation guard，而不是主导 batch choice。
-4. 如果改进后 BPS 仍只在窄区间有效，论文中应把 BPS 定位为辅助机制，把 KAS 作为主算法贡献。
+1. 在 rate6 附近做更细 sweep：`4/6/8`，用 prompt bucket TTFT 确认 BPS 的有效压力区间。
+2. 重新设计 BPS score，使 oldest/age 只作为 starvation guard，并加入 long-prompt protection。
+3. 如果改进后 BPS 仍只在窄区间有效，论文中应把 BPS 定位为辅助机制，把 KAS 作为主算法贡献。

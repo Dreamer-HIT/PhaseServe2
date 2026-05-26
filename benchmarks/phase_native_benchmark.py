@@ -334,17 +334,49 @@ def summarize_records(records, args, wall_time_s):
         if (args.slo_ttft_s is None or r.get("ttft_s") is not None and r["ttft_s"] <= args.slo_ttft_s)
         and (args.slo_tpot_s is None or r.get("tpot_s") is not None and r["tpot_s"] <= args.slo_tpot_s)
     ]
+
+    def is_slo_good(record):
+        return (
+            record.get("ok")
+            and (args.slo_ttft_s is None or record.get("ttft_s") is not None and record["ttft_s"] <= args.slo_ttft_s)
+            and (args.slo_tpot_s is None or record.get("tpot_s") is not None and record["tpot_s"] <= args.slo_tpot_s)
+        )
+
+    def summarize_bucket_rows(all_rows, completed_rows):
+        good_rows = [r for r in completed_rows if is_slo_good(r)]
+        failed_rows = [r for r in all_rows if not r.get("ok")]
+        return {
+            "count": len(completed_rows),
+            "submitted": len(all_rows),
+            "completed": len(completed_rows),
+            "failed": len(failed_rows),
+            "goodput": len(good_rows),
+            "slo_attainment_completed": (
+                len(good_rows) / len(completed_rows) if completed_rows else None
+            ),
+            "slo_attainment_submitted": (
+                len(good_rows) / len(all_rows) if all_rows else None
+            ),
+            "prompt_len": summarize([r.get("prompt_len") for r in completed_rows]),
+            "output_len": summarize([r.get("output_len") for r in completed_rows]),
+            "ttft_s": summarize([r.get("ttft_s") for r in completed_rows]),
+            "tpot_s": summarize([r.get("tpot_s") for r in completed_rows]),
+            "latency_s": summarize([r.get("latency_s") for r in completed_rows]),
+            "context_queue_s": summarize([r.get("context_queue_s") for r in completed_rows]),
+            "context_exec_s": summarize([r.get("context_exec_s") for r in completed_rows]),
+            "bridge_queue_s": summarize([r.get("bridge_queue_s") for r in completed_rows]),
+            "migration_s": summarize([r.get("migration_s") for r in completed_rows]),
+            "decode_queue_s": summarize([r.get("decode_queue_s") for r in completed_rows]),
+            "decode_exec_s": summarize([r.get("decode_exec_s") for r in completed_rows]),
+        }
+
     bucket_summary = {}
     for bucket_key in ["prompt_bucket", "output_bucket"]:
         bucket_summary[bucket_key] = {}
         for bucket in sorted({r[bucket_key] for r in records}):
-            rows = [r for r in ok if r[bucket_key] == bucket]
-            bucket_summary[bucket_key][bucket] = {
-                "count": len(rows),
-                "ttft_s": summarize([r.get("ttft_s") for r in rows]),
-                "tpot_s": summarize([r.get("tpot_s") for r in rows]),
-                "latency_s": summarize([r.get("latency_s") for r in rows]),
-            }
+            all_rows = [r for r in records if r[bucket_key] == bucket]
+            completed_rows = [r for r in ok if r[bucket_key] == bucket]
+            bucket_summary[bucket_key][bucket] = summarize_bucket_rows(all_rows, completed_rows)
     return {
         "throughput": {
             "offered_req_s": args.request_rate if args.request_rate not in [float("inf"), 0.0] else None,

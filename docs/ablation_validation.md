@@ -32,6 +32,8 @@
 
 `bps_bucket_only`、`bps_no_oldest_bonus`、`bps_age_bonus` 这类变体只作为内部诊断或 appendix 候选。除非其中某个变体成为最终采用的算法版本，否则不进入主文核心表格。主文最多用一张小型 “BPS design sensitivity” 图说明 BPS 对 scoring 设计敏感，避免把论文叙事变成大规模参数搜索。
 
+最终主文的机制归因应结合 `docs/bucket_breakdown_validation.md`：BPS 用 prompt bucket 的 TTFT 证明，KAS 用 output bucket 的 TPOT 证明，PBC 用 `phase` vs `bps_kas` 的 full-system 稳定性证明。
+
 相关脚本：
 
 - `scripts/run_phase_hetero_1p1d.sh`
