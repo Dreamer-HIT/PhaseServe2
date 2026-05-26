@@ -67,7 +67,7 @@ class PressureBudgetController:
         ]
 
         self.max_prefill_tokens = max(max_prefill_tokens, 0)
-        default_min_prefill = int(self.max_prefill_tokens * _env_float("PHASESERVE_PBC_MIN_PREFILL_FRAC", 0.25))
+        default_min_prefill = int(self.max_prefill_tokens * _env_float("PHASESERVE_PBC_MIN_PREFILL_FRAC", 0.50))
         self.min_prefill_tokens = _env_int("PHASESERVE_PBC_MIN_PREFILL_TOKENS", default_min_prefill)
         self.max_prefill_block_margin = max_prefill_block_margin
         self.min_prefill_block_margin = _env_int("PHASESERVE_PBC_MIN_BLOCK_MARGIN", 0)

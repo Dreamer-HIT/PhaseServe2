@@ -66,6 +66,17 @@ def flatten_summary(path: Path):
         row[f"throughput_{key}"] = throughput.get(key)
     for metric, stat in METRIC_FIELDS:
         row[f"{metric}_{stat}"] = (data.get(metric) or {}).get(stat)
+    phase_components = (data.get("phase_metrics") or {}).get("components") or {}
+    decode = phase_components.get("decode") or {}
+    context = phase_components.get("context") or {}
+    row["phase_decode_swap_ins"] = decode.get("swap_ins")
+    row["phase_decode_evictions"] = decode.get("eviction_count")
+    row["phase_decode_scan_mean"] = (decode.get("decode_scan_limit") or {}).get("mean")
+    row["phase_decode_selected_mean"] = (decode.get("selected") or {}).get("mean")
+    row["phase_decode_max_skip_max"] = (decode.get("max_consecutive_skips") or {}).get("max")
+    row["phase_context_prefill_budget_mean"] = (context.get("prefill_token_budget") or {}).get("mean")
+    row["phase_context_selected_mean"] = (context.get("selected") or {}).get("mean")
+    row["phase_context_forced_oldest"] = context.get("forced_oldest")
     return row
 
 
@@ -86,6 +97,11 @@ def write_markdown(rows, output_path: Path):
         "tpot_s_p99",
         "latency_s_median",
         "latency_s_p99",
+        "phase_decode_swap_ins",
+        "phase_decode_evictions",
+        "phase_decode_scan_mean",
+        "phase_decode_selected_mean",
+        "phase_context_prefill_budget_mean",
     ]
     with output_path.open("w") as f:
         f.write("| " + " | ".join(columns) + " |\n")
