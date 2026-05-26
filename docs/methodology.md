@@ -10,7 +10,7 @@
 
 按系统顶会标准，这一版的判断是：
 
-> PhaseServe 具备**中等顶会潜力**，但还没有达到可以直接投稿 OSDI/SOSP/NSDI/EuroSys/ASPLOS/ATC 的方法论完成度。当前最强的论文主线不是“我们实现了若干 scheduler”，而是“prefill-decode 解耦之后仍然存在 decode-side pressure 向 prefill 反向传播的问题；PhaseServe 将这种运行时压力转化为 admission budget，并让 prefill/decode 在该预算下执行阶段特化调度”。
+> PhaseServe 具备**中等偏强顶会潜力**，但还没有达到“强顶会潜力”或可以直接投稿 OSDI/SOSP/NSDI/EuroSys/ASPLOS/ATC 的方法论完成度。当前最强的论文主线不是“我们实现了若干 scheduler”，而是“prefill-decode 解耦之后仍然存在 decode-side pressure 向 prefill 反向传播的问题；PhaseServe 将这种运行时压力转化为 admission budget，并让 prefill/decode 在该预算下执行阶段特化调度”。
 
 这比初稿更聚焦，也更容易实验验证。初稿中应该弱化或移出主贡献的方向包括：
 
@@ -22,7 +22,7 @@
 
 > PhaseServe 是一个面向 prefill-decode 解耦式 LLM serving 的 pressure-budgeted online scheduling framework。PBC 将 decode-side queue、KV block、bridge queue 和 swap pressure 映射为 admission budget；BPS 在该 budget 下执行 known-size prefill shaping；KAS 在该 budget 下执行 unknown-size KV-constrained decode active-set shaping。
 
-但是，这一版仍有一个关键短板：**PBC 还必须从 watermark-style backpressure 升级为有原则的 pressure-to-budget controller**。如果 PBC 只是手调阈值，BPS 像 bucket batching，KAS 像 LAS/MLFQ 变体，那么 reviewer 仍可能把 PhaseServe 评价为 heuristic glue。下一步方法论优化应优先补强 PBC 的 pressure vector、budget vector、归一化方法、monotonic mapping、hysteresis/smoothing 和 bounded-pressure 论证。
+本版进一步把 PBC 从 watermark-style backpressure 升级为有原则的 pressure-to-budget controller：PBC 明确定义 pressure vector、budget vector、归一化方法、monotonic mapping、hysteresis/smoothing 和 bounded-pressure 论证。这样 BPS 和 KAS 不再只是两个局部 scheduler，而是同一个 budgeted online scheduling framework 在 prefill 和 decode 两个阶段上的实例化。
 
 ## 推荐论文主张
 
@@ -103,6 +103,18 @@ PhaseServe 的方法论需要清楚地区分于以下相关系统：
 - vLLM / PagedAttention: https://arxiv.org/abs/2309.06180
 - Mooncake: https://arxiv.org/abs/2407.00079
 
+更适合正文使用的定位矩阵如下：
+
+| 系统 | 已解决的问题 | 没有重点解决的问题 | PhaseServe 的新增层次 | 需要纳入的 baseline / ablation |
+|---|---|---|---|---|
+| DistServe | prefill/decode disaggregation、资源配置、SLO-aware placement | 解耦后的 runtime pressure propagation、阶段内 scheduler mismatch | 在 DistServe 资源规划之上增加 pressure-budgeted online scheduling | DistServe FCFS、DistServe + BPS、DistServe + KAS、PhaseServe full |
+| Splitwise | prompt/generation 分离、异构硬件配置 | 在线 admission budget、KV/swap pressure feedback | 把 phase split 后的 runtime scheduling 作为主问题 | Splitwise-style static split 或等价静态配置 |
+| Sarathi / Sarathi-Serve | colocated 场景下的 chunked prefill、decode piggybacking | disaggregated bridge queue、跨阶段 KV handoff pressure | 在解耦部署下控制 prefill 对 decode 的压力注入 | chunked prefill / size-aware prefill ablation |
+| vLLM / PagedAttention | continuous batching、paged KV cache、KV 内存效率 | prefill/decode 解耦后的 phase-specific pressure budget | 不替代 KV allocator，而是把 KV pressure 作为 scheduling constraint | FCFS continuous batching、pure LAS、KV-unaware LAS |
+| Mooncake | KV-centric disaggregated serving、KV cache transfer 与 overload handling | 本文聚焦的轻量 scheduler/admission extension | 不 claim 新 KV architecture，只 claim KV-aware admission 和 pressure feedback | swap/residency 指标对比，避免泛化到 KV architecture claim |
+
+论文中应主动承认：PhaseServe 的主贡献不是新的 KV cache architecture，也不是新的 cluster-level router。它的不可替代性来自 **在 phase-disaggregated runtime 中把下游 pressure 转化为上游和本地 active-set 的预算约束**。因此，如果实验只证明 BPS 或 KAS 单独有效，而 PBC 消融不明显，论文贡献会显著变弱。
+
 ## 系统抽象
 
 建议在论文方法论中使用一个简洁抽象，而不是从一开始就描述复杂控制平面。
@@ -128,6 +140,105 @@ PhaseServe 的方法论需要清楚地区分于以下相关系统：
 5. KV block residency 和 available block budget。
 
 这个抽象足够支撑一篇系统论文，因为它不依赖脆弱的 learned latency predictor，也不要求完整重写 serving engine。
+
+## 统一 Pressure-Budget 问题
+
+为了避免 PhaseServe 被理解成 backpressure、bucket batching 和 LAS 的拼装，论文应先给出统一的 pressure-budget optimization view：
+
+```text
+observe pressure vector p(t)
+compute admission budget vector b(t) = PBC(p(t), b(t-1))
+run phase-local schedulers under b(t)
+```
+
+其中，`p(t)` 是由运行时低成本信号组成的归一化压力向量：
+
+```text
+p(t) = [
+  q_bridge(t),      # bridge / unaccepted queue pressure
+  q_decode(t),      # decode waiting pressure
+  u_kv(t),          # GPU KV block utilization pressure
+  s_swap(t),        # swap-in / swap-out pressure
+  a_prefill(t)      # oldest prefill waiting pressure
+]
+```
+
+每个分量都被归一化到 `[0, 1]`，并使用部署时可解释的容量或 SLO 阈值作为分母：
+
+```text
+q_bridge  = min(bridge_queue_len / bridge_queue_target, 1)
+q_decode  = min(decode_waiting_tokens_or_reqs / decode_queue_target, 1)
+u_kv      = active_and_waiting_kv_blocks / gpu_block_capacity
+s_swap    = min(swap_bytes_per_sec / swap_bandwidth_budget, 1)
+a_prefill = min(oldest_prefill_wait / tau_prefill, 1)
+```
+
+PBC 输出的 `b(t)` 是结构化预算向量：
+
+```text
+b(t) = [
+  c_prefill_tok(t),     # prefill token budget
+  m_prefill_blk(t),     # prefill KV block safety margin
+  c_decode_req(t),      # decode active request budget
+  s_decode_swap(t),     # decode swap-in budget per iteration
+  l_decode_scan(t),     # decode scan limit
+  allow_oldest(t)       # bounded-progress override
+]
+```
+
+PhaseServe 的统一目标不是求解离线最优，而是用低开销在线控制近似求解一个 bounded-pressure / goodput-maximization problem：
+
+```text
+maximize    SLO_goodput(b(t))
+subject to  q_bridge(t) <= q_bridge_target
+            q_decode(t) <= q_decode_target
+            u_kv(t)     <= u_kv_target
+            s_swap(t)   <= s_swap_target
+            starvation_prefill <= tau_prefill
+            starvation_decode  <= skip_threshold + infeasible_rounds
+```
+
+PBC 的角色是把这个约束问题转化为每轮可执行的预算 `b(t)`。换言之，PBC 是一个低开销近似求解器：当 pressure 低时扩大 feasible region 以提高 goodput，当 downstream pressure 接近约束边界时单调收缩 feasible region 以降低 pressure drift。它不声称求解离线最优，而是用 monotone feasible-region shrinking 近似 bounded-pressure goodput maximization。
+
+BPS 和 KAS 的角色不是各自追求局部最优，而是在 `b(t)` 下选择阶段动作：
+
+```text
+select feasible action a_t in A_phase(b(t))
+to maximize U_phase(a_t)
+subject to progress invariant
+```
+
+其中：
+
+- BPS 的 `a_t` 是一个 prefill batch，`U_phase` 由 token fill、padding waste、block risk 和 oldest bonus 构成。
+- KAS 的 `a_t` 是一个 decode active set，`U_phase` 由 attained-service priority、resident preference、swap feasibility 和 skip-bounded fairness 构成。
+- PBC 的 `b(t)` 决定二者的 feasible action set，因此不是可选反馈参数，而是统一优化模板的约束入口。
+
+这个统一模板在两个阶段中的实例化如下：
+
+| Phase policy | Action `a_t` | Feasible set `A_phase(b(t))` | Utility terms | Progress invariant | Failure metric |
+|---|---|---|---|---|---|
+| BPS | prefill batch | request/token/KV block budget、PBC prefill margin、bounded candidate window | token fill、padding waste、block risk、oldest bonus | oldest request 超过 `tau_prefill` 后必须被包含或单独 dispatch | long-prompt wait、TTFT tail、protected dispatch ratio |
+| KAS | decode active set | decode request budget、GPU block budget、swap budget per iteration、scan limit | attained-service priority、resident preference、swap feasibility、waiting age | starved request 在资源可行时不能被同级非 starved request 无限绕过 | max skips、long-output slowdown、swap stall、resident admission ratio |
+
+在该目标下，PhaseServe 在线维护两个性质：
+
+1. **Bounded pressure**：当下游 pressure 高于目标区间时，PBC 单调收紧会继续注入下游压力的预算。
+2. **Bounded progress**：即使下游 pressure 高，超过等待阈值的 oldest request 和 starved decode request 仍有受控通过路径。
+
+更形式化地，PBC 应满足：
+
+```text
+if p_i(t) increases, then pressure-increasing budgets do not increase
+if p_i(t) remains high for H rounds, then injected KV footprint decreases or stays bounded
+if a_prefill(t) reaches 1, then allow_oldest(t) = true
+```
+
+在这个统一视角下：
+
+- BPS 是 `b(t)` 约束下的 known-size online batching。
+- KAS 是 `b(t)` 约束下的 unknown-size active-set selection。
+- PBC 是两个阶段的共同预算生成器，而不是 BPS 的一个可选参数。
 
 ## 形式化问题建模
 
@@ -661,7 +772,7 @@ KAS 的核心 claim 应该是：
 
 ### 算法输入
 
-PBC 使用以下低成本信号：
+PBC 使用以下低成本信号，并将其归一化为 pressure vector：
 
 1. `active_decode_blocks`
 2. `waiting_decode_blocks`
@@ -673,27 +784,97 @@ PBC 使用以下低成本信号：
 
 ### 机制
 
-定义 decode pressure：
+PBC 分三步运行：pressure normalization、monotonic budget mapping、hysteresis smoothing。
+
+**第一步：pressure normalization。**
+
+PBC 不直接把原始 queue length、block 数和 swap bytes 相加，而是先归一化为 `[0, 1]` 压力分量：
 
 ```text
-decode_pressure =
-  active_decode_blocks / gpu_block_budget
-  + waiting_decode_blocks / gpu_block_budget
-  + bridge_queue_length / bridge_threshold
-  + swap_pressure
+p_bridge = min(bridge_queue_length / B_target, 1)
+p_decode = min(waiting_decode_blocks / D_target, 1)
+p_kv     = min((active_decode_blocks + waiting_decode_blocks) / G_blocks, 1)
+p_swap   = min(swap_in_bytes_per_sec / S_target, 1)
+p_age    = min(oldest_prefill_wait / tau_prefill, 1)
 ```
 
-当 decode pressure 高时，prefill scheduler 应该：
+其中，`B_target`、`D_target`、`S_target` 不是任意 magic number，而是由 SLO 或硬件容量决定：
 
-1. 降低目标 batch size 或 token budget。
-2. 避免 dispatch 会产生大量 KV footprint 的超长 prompt batch。
-3. 在等待时间可接受时，优先处理 KV footprint 较小的请求。
+1. `B_target`：超过该 bridge queue 后，TTFT-to-first-decode 开始明显恶化。
+2. `D_target`：decode waiting blocks 的目标上限。
+3. `G_blocks`：GPU KV block capacity。
+4. `S_target`：每秒可承受 swap 带宽或每 iteration 可承受 swap bytes。
+5. `tau_prefill`：最长可接受 prefill queue wait。
 
-当 decode pressure 低时，prefill scheduler 可以：
+**第二步：monotonic budget mapping。**
 
-1. 更激进地填满 batch。
-2. 允许更长 prompt 进入。
-3. 提高 prefill 资源利用率。
+PBC 将归一化压力映射为预算。映射必须单调：任何 downstream pressure 上升时，可能继续增加 downstream load 的预算不能变宽。
+
+```text
+rho_down = max(p_bridge, p_decode, p_kv, p_swap)
+
+c_prefill_tok_raw =
+  c_prefill_min + (1 - rho_down) * (c_prefill_max - c_prefill_min)
+
+m_prefill_blk_raw =
+  m_prefill_min + rho_down * (m_prefill_max - m_prefill_min)
+
+s_decode_swap_raw =
+  s_swap_min + (1 - p_swap) * (s_swap_max - s_swap_min)
+
+l_decode_scan_raw =
+  l_scan_min + (1 - max(p_kv, p_swap)) * (l_scan_max - l_scan_min)
+```
+
+`rho_down = max(...)` 使用的是 bottleneck-dominant control：在 phase-disaggregated serving 中，只要 bridge queue、decode queue、KV blocks 或 swap 任一链路成为瓶颈，继续扩大 prefill handoff 都会把压力推向同一个下游 decode pool。因此默认策略由最紧的压力分量决定预算，而不是用平均压力掩盖单点过载。
+
+论文中应把它作为设计选择而不是唯一真理，并做 sensitivity：
+
+```text
+rho_down = max(p_i)                         # bottleneck-dominant, default
+rho_down = sum(w_i * p_i)                   # weighted pressure, smoother
+rho_down = lexicographic(p_kv, p_swap, ...) # memory-first overload control
+```
+
+如果 `max` 在实验中频繁导致过度保守，PhaseServe 的 claim 应收窄为“bottleneck-dominant pressure control 适合 memory/decode-pressure workload”，而不是声称所有负载下最优。
+
+直觉是：
+
+1. `rho_down` 高时，prefill token budget 下降，prefill block margin 上升，减少新的 KV handoff footprint。
+2. `p_swap` 高时，KAS 每轮允许 swap-in 的预算下降，避免 decode iteration 被 swap 拖慢。
+3. `p_kv` 和 `p_swap` 高时，decode scan limit 变保守，优先填充 resident / cheap active set。
+4. `p_age` 高时触发 progress override，避免 prefill starvation。
+
+**第三步：hysteresis smoothing。**
+
+PBC 不直接使用 raw budget，而是使用平滑和双阈值避免抖动：
+
+```text
+b_smooth(t) = lambda * b_smooth(t-1) + (1 - lambda) * b_raw(t)
+
+if rho_down >= rho_high:
+  mode = BACKPRESSURE
+elif rho_down <= rho_low:
+  mode = OPEN
+else:
+  mode = previous_mode or BALANCED
+```
+
+其中 `rho_high > rho_low`。这给出一个工程上可验证的稳定性论证：只要 pressure 在 `[rho_low, rho_high]` 附近小幅波动，PBC 不会每轮改变 mode；预算变化幅度被 `lambda` 限制：
+
+```text
+|b_smooth(t) - b_smooth(t-1)| <= (1 - lambda) * |b_raw(t) - b_smooth(t-1)|
+```
+
+由此可以定义三个可实验验证的 stability metrics：
+
+```text
+mode_switch_rate = #mode_changes / #scheduler_rounds
+budget_variance  = Var(c_prefill_tok, m_prefill_blk, s_decode_swap)
+pressure_overshoot = max(0, rho_down - rho_high)
+```
+
+方法论层面只需要承诺 bounded oscillation，而不是严格控制理论最优。可接受条件应在实验前固定，例如：PhaseServe full 的 `mode_switch_rate` 不应高于调度轮数的 5%-10%；`pressure_overshoot` 应随 PBC 开启而下降；budget variance 不应与 tail latency 同时恶化。如果这些条件不成立，则 PBC claim 失败，即使某个延迟指标偶然改善。
 
 PBC 不只输出一个二值 backpressure mode，而是输出一个结构化 `AdmissionBudget`：
 
@@ -710,59 +891,63 @@ AdmissionBudget:
 
 这样论文中的核心机制不是“调几个阈值”，而是把可观测压力稳定地转成两个阶段共享的预算接口。
 
+### 参数选择原则
+
+PBC 参数应避免看起来像针对单一实验 workload 手调。论文中建议使用如下规则：
+
+1. 容量类参数来自系统配置，例如 GPU block capacity、max prefill tokens、max decode batch size。
+2. SLO 类参数来自服务目标，例如 TTFT SLO、TPOT SLO、可接受 bridge queue wait。
+3. 带宽类参数来自微基准，例如 CPU/GPU swap bandwidth、一次 decode iteration 可隐藏的 swap bytes。
+4. `rho_low` 和 `rho_high` 使用固定间隔，例如 `0.55/0.75`，并做 sensitivity sweep。
+5. `lambda` 使用少量离散值，例如 `0.6/0.8/0.9`，报告 mode switch rate 和 tail latency 的敏感性。
+
+如果参数只在一个模型或一个 trace 上有效，PhaseServe 的方法论不成立。因此后续实验必须报告至少一次跨 load、跨 memory pressure 或跨模型的参数敏感性。
+
 ### 伪代码
 
 ```text
 PBC(context_state, decode_state):
-  decode_pressure = estimate_pressure(decode_state)
+  p = normalize_pressure(context_state, decode_state)
+  rho_down = max(p.bridge, p.decode, p.kv, p.swap)
 
-  if decode_pressure >= high_watermark:
+  raw_budget.prefill_token_budget =
+    map_decreasing(rho_down, min_prefill_budget, max_prefill_budget)
+  raw_budget.prefill_block_margin =
+    map_increasing(rho_down, low_safety_margin, high_safety_margin)
+  raw_budget.decode_swap_budget_per_iter =
+    map_decreasing(p.swap, min_swap_budget, max_swap_budget)
+  raw_budget.decode_scan_limit =
+    map_decreasing(max(p.kv, p.swap), conservative_scan_limit, normal_scan_limit)
+
+  if rho_down >= rho_high:
     mode = BACKPRESSURE
-    prefill_token_budget = min_prefill_budget
-    prefill_block_margin = high_safety_margin
-    decode_swap_budget_per_iter = min_swap_budget
-    decode_scan_limit = conservative_scan_limit
-    prefer_small_kv_footprint = true
-
-  else if decode_pressure <= low_watermark:
+  else if rho_down <= rho_low:
     mode = OPEN
-    prefill_token_budget = max_prefill_budget
-    prefill_block_margin = low_safety_margin
-    decode_swap_budget_per_iter = max_swap_budget
-    decode_scan_limit = normal_scan_limit
-    prefer_small_kv_footprint = false
-
   else:
-    mode = BALANCED
-    prefill_token_budget = interpolate(decode_pressure)
-    prefill_block_margin = interpolate(decode_pressure)
-    decode_swap_budget_per_iter = interpolate(decode_pressure)
-    decode_scan_limit = interpolate(decode_pressure)
+    mode = previous_mode or BALANCED
 
-  if oldest_prefill_wait >= tau_prefill:
+  budget = smooth(previous_budget, raw_budget, lambda)
+  budget.mode = mode
+  budget.prefer_small_kv_footprint = (rho_down >= rho_high)
+
+  if p.age >= 1:
     allow_protected_oldest = true
+  budget.allow_protected_oldest = allow_protected_oldest
 
-  return AdmissionBudget(
-    mode,
-    prefill_token_budget,
-    prefill_block_margin,
-    prefer_small_kv_footprint,
-    decode_swap_budget_per_iter,
-    decode_scan_limit,
-    allow_protected_oldest
-  )
+  return budget
 ```
 
 BPS 不直接读取 decode 内部队列，KAS 也不直接改动 prefill waiting queue。二者都读取 PBC 生成的 `AdmissionBudget`。这样实现上保持模块边界清楚，论文中也更容易解释。
 
 ### 设计不变量
 
-PBC 应维护四个不变量：
+PBC 应维护五个不变量：
 
-1. **Budget monotonicity invariant**：decode pressure 越高，prefill token budget 不应增大，prefill block margin 不应减小，decode swap budget 不应放宽。
-2. **Backpressure invariant**：当 decode pressure 超过 high watermark 时，BPS 不能继续以最大 token budget 积极 dispatch 大 KV footprint batch。
+1. **Budget monotonicity invariant**：downstream pressure 越高，prefill token budget 不应增大，prefill block margin 不应减小，decode swap budget 不应放宽。
+2. **Bounded injection invariant**：当 `rho_down >= rho_high` 时，BPS 不能继续以最大 token budget 积极 dispatch 大 KV footprint batch。
 3. **Progress invariant**：即使 decode pressure 高，protected oldest request 仍然可以在 bounded waiting 后被允许通过，避免 prefill starvation。
-4. **Hysteresis invariant**：high watermark 和 low watermark 分离，并对输出预算做平滑，避免 admission budget 在临界压力附近频繁抖动。
+4. **Hysteresis invariant**：`rho_high` 和 `rho_low` 分离，并对输出预算做平滑，避免 admission budget 在临界压力附近频繁抖动。
+5. **Observable stability invariant**：实验中应报告 mode switch rate、budget variance 和 pressure overshoot；如果 PBC 频繁抖动，不能只报告端到端 latency。
 
 ### 可发表 claim
 
@@ -983,6 +1168,19 @@ distserve/single_stage_engine.py
 
 虽然本阶段不写实验，但方法论必须能导向后续评估。
 
+论文应预注册 workload class 和 primary metric，避免实验结果被认为 cherry-pick：
+
+| Workload class | 压力来源 | Primary metric | Secondary metric | 预期结果 | Claim failure condition |
+|---|---|---|---|---|---|
+| Prompt-skew | prompt length 高度偏斜，prefill queue head-of-line blocking | TTFT p95/p99、context queue time | prefill utilization、long-prompt wait | BPS 明显改善；PBC 低压时不应伤害吞吐 | BPS 无法优于 FCFS / shortest-prompt 或长 prompt starvation 明显恶化 |
+| Decode-variance | output length 长尾，短/长输出混合 | TPOT p95/p99、short-request slowdown | long-output slowdown、skip count | KAS 改善短请求和 TPOT tail，但可能轻微牺牲长输出均值 | KAS 只改善短请求但 long-output slowdown 或 max skips 失控 |
+| Decode-pressure | decode 阶段接近饱和，bridge queue 增长 | SLO goodput、bridge queue length | TTFT median、prefill token throughput | PBC+BPS 应降低下游过载，允许 TTFT median 小幅 tradeoff | PBC 不能降低 bridge queue / SLO goodput，说明 pressure-budget claim 失败 |
+| Memory-pressure | GPU KV block 紧张或 swap 频繁 | swap bytes、iteration stall、resident admission ratio | TPOT tail、eviction count | KAS 的 KV/swap 约束必须显著优于 KV-unaware LAS | swap bytes、stall 或 resident ratio 没有改善，不能 claim KV-constrained scheduling |
+| Homogeneous / low-load | prompt/output 都同质或负载远低于饱和 | overhead、no-regression latency | throughput | PhaseServe 收益应下降；重点证明 overhead 可忽略 | overhead 明显伤害 median latency 或 throughput，部署价值不足 |
+| Swap-dominated overload | swap 带宽成为主瓶颈 | goodput under SLO、swap stall time | rejection/timeout ratio | PhaseServe 不应 claim 总能修复，必要时讨论 admission control 边界 | 如果所有策略都过载，论文应承认需要 admission/rejection，而不是扩大 PhaseServe claim |
+
+这张表应成为实验章节的约束：每类 workload 先声明 primary metric，再看 PhaseServe 是否改善该类 bottleneck。不要在实验后临时挑选提升最大的指标作为主结果。
+
 建议后续实验至少覆盖：
 
 1. **End-to-end comparison**：DistServe FCFS vs PhaseServe full。
@@ -992,7 +1190,8 @@ distserve/single_stage_engine.py
 5. **Load sweep**：从低负载到接近饱和。
 6. **Memory pressure sweep**：改变 GPU KV block budget 或并发上限。
 7. **Fairness analysis**：检查长请求是否被过度牺牲。
-8. **Overhead analysis**：scheduler CPU overhead、额外 queue 操作成本、swap 次数变化。
+8. **Controller stability analysis**：PBC mode switch rate、budget variance、pressure overshoot。
+9. **Overhead analysis**：scheduler CPU overhead、额外 queue 操作成本、swap 次数变化。
 
 如果这些实验能做完整，这篇论文的方法论会明显更扎实。
 
@@ -1008,7 +1207,7 @@ PhaseServe 的贡献不是单个复杂 heuristic，而是识别了 prefill/decod
 - BPS: budgeted cost-compatible shaping for known-size prefill；
 - KAS: KV-constrained attained-service scheduling for unknown-size decode。
 
-实现是轻量启发式，但设计不是 ad hoc：PBC 维护 budget monotonicity、backpressure、progress 和 hysteresis 四个不变量；BPS 维护 feasibility、oldest protection 和 no artificial waiting 三个不变量；KAS 维护 iteration feasibility、attained-service ordering、resident preference 和 skip-bounded fairness 四个不变量。
+实现是轻量启发式，但设计不是 ad hoc：PBC 维护 budget monotonicity、bounded injection、progress、hysteresis 和 observable stability 五个不变量；BPS 维护 feasibility、oldest protection 和 no artificial waiting 三个不变量；KAS 维护 iteration feasibility、attained-service ordering、resident preference 和 skip-bounded fairness 四个不变量。
 
 ### 质疑二：为什么不用 learned latency predictor？
 
@@ -1106,7 +1305,7 @@ PhaseServe 不 claim 新 KV cache architecture。它只把 KV block pressure 作
 - 为什么 prefill 和 decode 是不同在线调度问题。
 - 为什么 prompt length 和 generated tokens 是足够好的信号。
 - 为什么 bridge pressure 是 phase-disaggregated serving 中不可忽略的第三类压力。
-- PBC 的 pressure-to-budget 转换、high/low watermark、budget monotonicity 和 hysteresis 规则。
+- PBC 的 pressure vector、budget vector、monotonic mapping、hysteresis smoothing 和 bounded-pressure 规则。
 - BPS 的 budgeted cost-compatible batch 选择规则和 bounded waiting 规则。
 - KAS 的 KV-constrained LAS 队列组织、resident-first tie-breaker 和 skip-based fairness 规则。
 - 每个机制的消融实验计划。
