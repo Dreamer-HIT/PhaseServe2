@@ -32,6 +32,10 @@ METRICS = [
     "phase_decode_rho_memory",
     "phase_decode_rho_swap",
     "phase_decode_pressure_overshoot",
+    "phase_decode_starved_admission_ratio",
+    "phase_decode_policy_skipped",
+    "phase_decode_infeasible_rounds",
+    "phase_decode_max_infeasible",
 ]
 
 BUCKET_METRICS = [
@@ -49,6 +53,10 @@ BUCKET_METRICS = [
     "tpot_p95",
     "tpot_p99",
     "latency_p99",
+    "e2e_per_output_token_p90",
+    "e2e_per_output_token_p99",
+    "decode_per_output_token_p90",
+    "decode_per_output_token_p99",
     "context_queue_p90",
     "context_queue_p99",
     "context_exec_p90",
@@ -92,6 +100,10 @@ def load_summary(path: Path):
     phase_decode_rho_memory = (decode.get("rho_memory") or {}).get("mean")
     phase_decode_rho_swap = (decode.get("rho_swap") or {}).get("mean")
     phase_decode_rho_scan = (decode.get("rho_scan") or {}).get("mean")
+    phase_decode_starved_admission_ratio = (decode.get("starved_admission_ratio") or {}).get("mean")
+    phase_decode_policy_skipped = decode.get("policy_skipped")
+    phase_decode_infeasible_rounds = decode.get("infeasible_rounds")
+    phase_decode_max_infeasible = (decode.get("max_consecutive_infeasible") or {}).get("max")
     phase_context_prefill_budget = (context.get("prefill_token_budget") or {}).get("mean")
     phase_context_prefill_budget_ratio = (context.get("prefill_budget_ratio") or {}).get("mean")
     phase_context_prefill_block_margin = (context.get("prefill_block_margin") or {}).get("mean")
@@ -133,11 +145,19 @@ def load_summary(path: Path):
         "phase_decode_rho_memory": phase_decode_rho_memory,
         "phase_decode_rho_swap": phase_decode_rho_swap,
         "phase_decode_rho_scan": phase_decode_rho_scan,
+        "phase_decode_starved_admission_ratio": phase_decode_starved_admission_ratio,
+        "phase_decode_policy_skipped": phase_decode_policy_skipped,
+        "phase_decode_infeasible_rounds": phase_decode_infeasible_rounds,
+        "phase_decode_max_infeasible": phase_decode_max_infeasible,
         "phase_decode_pressure_overshoot_mean": phase_decode_pressure_overshoot,
         "phase_decode_rho_prefill_mean": phase_decode_rho_prefill,
         "phase_decode_rho_memory_mean": phase_decode_rho_memory,
         "phase_decode_rho_swap_mean": phase_decode_rho_swap,
         "phase_decode_rho_scan_mean": phase_decode_rho_scan,
+        "phase_decode_starved_admission_ratio_mean": phase_decode_starved_admission_ratio,
+        "phase_decode_policy_skipped_mean": phase_decode_policy_skipped,
+        "phase_decode_infeasible_rounds_mean": phase_decode_infeasible_rounds,
+        "phase_decode_max_infeasible_mean": phase_decode_max_infeasible,
         "phase_context_prefill_budget": phase_context_prefill_budget,
         "phase_context_prefill_budget_ratio": phase_context_prefill_budget_ratio,
         "phase_context_prefill_block_margin": phase_context_prefill_block_margin,
@@ -204,6 +224,8 @@ def load_bucket_rows(path: Path):
                 "ttft_s",
                 "tpot_s",
                 "latency_s",
+                "e2e_per_output_token_s",
+                "decode_per_output_token_s",
                 "context_queue_s",
                 "context_exec_s",
                 "decode_queue_s",
@@ -418,6 +440,10 @@ def write_markdown(path: Path, grouped, paired):
             "phase_decode_rho_memory_mean",
             "phase_decode_rho_swap_mean",
             "phase_decode_pressure_overshoot_mean",
+            "phase_decode_starved_admission_ratio_mean",
+            "phase_decode_policy_skipped_mean",
+            "phase_decode_infeasible_rounds_mean",
+            "phase_decode_max_infeasible_mean",
         ]
         f.write("| " + " | ".join(cols) + " |\n")
         f.write("|" + "|".join(["---"] * len(cols)) + "|\n")
@@ -452,6 +478,7 @@ def write_bucket_markdown(path: Path, grouped, paired):
             "completed_mean", "slo_attainment_submitted_mean",
             "ttft_p50_mean", "ttft_p90_mean", "ttft_p99_mean",
             "tpot_p50_mean", "tpot_p90_mean", "tpot_p99_mean",
+            "e2e_per_output_token_p99_mean", "decode_per_output_token_p99_mean",
             "context_queue_p90_mean", "decode_queue_p90_mean",
         ]
         f.write("| " + " | ".join(cols) + " |\n")

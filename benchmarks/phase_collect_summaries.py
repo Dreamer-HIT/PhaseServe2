@@ -73,7 +73,16 @@ def flatten_summary(path: Path):
     row["phase_decode_evictions"] = decode.get("eviction_count")
     row["phase_decode_scan_mean"] = (decode.get("decode_scan_limit") or {}).get("mean")
     row["phase_decode_selected_mean"] = (decode.get("selected") or {}).get("mean")
+    row["phase_decode_starved_ready"] = decode.get("starved_ready")
+    row["phase_decode_starved_selected"] = decode.get("starved_selected")
+    row["phase_decode_starved_admission_ratio_mean"] = (decode.get("starved_admission_ratio") or {}).get("mean")
+    row["phase_decode_policy_skipped"] = decode.get("policy_skipped")
+    row["phase_decode_infeasible_rounds"] = decode.get("infeasible_rounds")
+    row["phase_decode_infeasible_gpu_append_blocks"] = decode.get("infeasible_gpu_append_blocks")
+    row["phase_decode_infeasible_gpu_swap_blocks"] = decode.get("infeasible_gpu_swap_blocks")
+    row["phase_decode_infeasible_swap_budget"] = decode.get("infeasible_swap_budget")
     row["phase_decode_max_skip_max"] = (decode.get("max_consecutive_skips") or {}).get("max")
+    row["phase_decode_max_infeasible_max"] = (decode.get("max_consecutive_infeasible") or {}).get("max")
     row["phase_decode_mode_switch_rate_mean"] = (decode.get("controller_mode_switch_rate") or {}).get("mean")
     row["phase_decode_budget_delta_mean"] = (decode.get("controller_budget_delta") or {}).get("mean")
     row["phase_decode_pressure_overshoot_mean"] = (decode.get("pressure_overshoot") or {}).get("mean")
@@ -120,6 +129,13 @@ def write_markdown(rows, output_path: Path):
         "phase_decode_evictions",
         "phase_decode_scan_mean",
         "phase_decode_selected_mean",
+        "phase_decode_starved_ready",
+        "phase_decode_starved_selected",
+        "phase_decode_starved_admission_ratio_mean",
+        "phase_decode_policy_skipped",
+        "phase_decode_infeasible_rounds",
+        "phase_decode_max_skip_max",
+        "phase_decode_max_infeasible_max",
         "phase_decode_pressure_overshoot_mean",
         "phase_decode_rho_memory_mean",
         "phase_decode_rho_swap_mean",

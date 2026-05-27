@@ -138,7 +138,18 @@ def summarize_phase_metrics(path: Optional[str]) -> Dict:
                 "swap_in_bytes": sum(r.get("swap_in_bytes", 0) for r in dispatch_rows),
                 "iteration_stall_s": summarize([r.get("iteration_stall_s") for r in dispatch_rows]),
                 "resident_admission_ratio": summarize([r.get("resident_admission_ratio") for r in dispatch_rows]),
+                "starved_ready": sum(r.get("starved_ready", 0) for r in dispatch_rows),
+                "starved_selected": sum(r.get("starved_selected", 0) for r in dispatch_rows),
+                "starved_admission_ratio": summarize([r.get("starved_admission_ratio") for r in dispatch_rows]),
+                "policy_skipped": sum(r.get("policy_skipped", 0) for r in dispatch_rows),
+                "infeasible_rounds": sum(r.get("infeasible_rounds", 0) for r in dispatch_rows),
+                "infeasible_batch_size": sum(r.get("infeasible_batch_size", 0) for r in dispatch_rows),
+                "infeasible_token_budget": sum(r.get("infeasible_token_budget", 0) for r in dispatch_rows),
+                "infeasible_gpu_append_blocks": sum(r.get("infeasible_gpu_append_blocks", 0) for r in dispatch_rows),
+                "infeasible_gpu_swap_blocks": sum(r.get("infeasible_gpu_swap_blocks", 0) for r in dispatch_rows),
+                "infeasible_swap_budget": sum(r.get("infeasible_swap_budget", 0) for r in dispatch_rows),
                 "max_consecutive_skips": summarize([r.get("max_consecutive_skips") for r in dispatch_rows]),
+                "max_consecutive_infeasible": summarize([r.get("max_consecutive_infeasible") for r in dispatch_rows]),
                 "eviction_count": sum(r.get("eviction_count", 0) for r in dispatch_rows),
             })
     return {
@@ -185,6 +196,9 @@ def request_result_to_record(result: RequestResult, request_id: int, scheduled_a
     else:
         tpot = (timestamps[-1] - timestamps[0]) / (len(timestamps) - 1)
     events = result.lifecycle_events
+    decode_exec_s = duration(events, "decoding_begin", "decoding_end")
+    latency_s = result.end_time - result.start_time
+    output_tokens = max(len(timestamps), 1)
     return {
         "request_id": request_id,
         "ok": True,
@@ -193,9 +207,13 @@ def request_result_to_record(result: RequestResult, request_id: int, scheduled_a
         "scheduled_at": scheduled_at,
         "start_time": result.start_time,
         "end_time": result.end_time,
-        "latency_s": result.end_time - result.start_time,
+        "latency_s": latency_s,
         "ttft_s": ttft,
         "tpot_s": tpot,
+        "e2e_per_output_token_s": latency_s / max(result.output_len, 1),
+        "decode_per_output_token_s": (
+            decode_exec_s / output_tokens if decode_exec_s is not None else None
+        ),
         "num_token_timestamps": len(timestamps),
         "token_timestamps": timestamps,
         "lifecycle_events": events,
@@ -204,7 +222,7 @@ def request_result_to_record(result: RequestResult, request_id: int, scheduled_a
         "bridge_queue_s": duration(events, "context_end", "migration_begin"),
         "migration_s": duration(events, "migration_begin", "migration_end"),
         "decode_queue_s": duration(events, "migration_end", "decoding_begin"),
-        "decode_exec_s": duration(events, "decoding_begin", "decoding_end"),
+        "decode_exec_s": decode_exec_s,
         "prompt_bucket": bucket_label(result.prompt_len, PROMPT_BUCKETS),
         "output_bucket": bucket_label(result.output_len, OUTPUT_BUCKETS),
     }
@@ -385,6 +403,12 @@ def summarize_records(records, args, wall_time_s):
             "ttft_s": summarize([r.get("ttft_s") for r in completed_rows]),
             "tpot_s": summarize([r.get("tpot_s") for r in completed_rows]),
             "latency_s": summarize([r.get("latency_s") for r in completed_rows]),
+            "e2e_per_output_token_s": summarize([
+                r.get("e2e_per_output_token_s") for r in completed_rows
+            ]),
+            "decode_per_output_token_s": summarize([
+                r.get("decode_per_output_token_s") for r in completed_rows
+            ]),
             "context_queue_s": summarize([r.get("context_queue_s") for r in completed_rows]),
             "context_exec_s": summarize([r.get("context_exec_s") for r in completed_rows]),
             "bridge_queue_s": summarize([r.get("bridge_queue_s") for r in completed_rows]),

@@ -328,10 +328,14 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
         self.current_budget = None
 
         self.consecutive_skips = {}
+        self.consecutive_infeasible = {}
         self.num_iterations = 0
         self.total_sched_time_s = 0.0
         self.total_selected = 0
         self.total_starved_selected = 0
+        self.total_starved_ready = 0
+        self.total_policy_skipped = 0
+        self.total_infeasible_rounds = 0
         self.total_swap_ins = 0
         self.total_swap_in_bytes = 0
         self.total_iteration_stall_s = 0.0
@@ -436,11 +440,17 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
             self._estimate_append_blocks_needed(request),
         )
 
-    def _can_add_to_las_batch(self, batch: BatchedRequests, request: Request, swap_ins_used: int, budget) -> bool:
+    def _check_add_to_las_batch(
+        self,
+        batch: BatchedRequests,
+        request: Request,
+        swap_ins_used: int,
+        budget,
+    ) -> Tuple[bool, str]:
         if len(batch) >= self.sched_config.max_batch_size:
-            return False
+            return False, "batch_size"
         if batch.get_num_input_tokens() + request.get_num_input_tokens() > self.sched_config.max_tokens_per_batch:
-            return False
+            return False, "token_budget"
 
         selected_append_needed = sum([
             self._get_append_blocks_needed_safe(req)
@@ -449,7 +459,9 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
         ])
         if self._is_resident(request):
             append_needed = self._get_append_blocks_needed_safe(request)
-            return append_needed + selected_append_needed <= self.block_manager.get_num_avail_gpu_blocks()
+            if append_needed + selected_append_needed <= self.block_manager.get_num_avail_gpu_blocks():
+                return True, "ok"
+            return False, "gpu_append_blocks"
 
         swap_budget = (
             budget.decode_swap_budget_per_iter
@@ -457,15 +469,21 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
             else self.max_swap_ins_per_iter
         )
         if swap_ins_used >= swap_budget:
-            return False
+            return False, "swap_budget"
         blocks_to_swap_in = self.block_manager.get_allocated_num_blocks(request.request_id)
         append_needed = self._estimate_append_blocks_needed(request)
-        return (
+        if (
             blocks_to_swap_in
             + append_needed
             + selected_append_needed
             <= self.block_manager.get_num_avail_gpu_blocks()
-        )
+        ):
+            return True, "ok"
+        return False, "gpu_swap_blocks"
+
+    def _can_add_to_las_batch(self, batch: BatchedRequests, request: Request, swap_ins_used: int, budget) -> bool:
+        can_add, _ = self._check_add_to_las_batch(batch, request, swap_ins_used, budget)
+        return can_add
 
     def _evict_resident_requests_for_blocks(
         self,
@@ -498,15 +516,26 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
                 break
         return evicted
 
-    def _requeue_unselected_requests(self, ready_requests: List[Request], selected_ids: set):
+    def _requeue_unselected_requests(
+        self,
+        ready_requests: List[Request],
+        selected_ids: set,
+        infeasible_ids: set,
+    ):
         self.waiting_queue = []
         self.swapped_queue = []
         for request in ready_requests:
             if request.request_id in selected_ids or request.is_finished:
                 continue
-            self.consecutive_skips[request.request_id] = (
-                self.consecutive_skips.get(request.request_id, 0) + 1
-            )
+            if request.request_id in infeasible_ids:
+                self.consecutive_infeasible[request.request_id] = (
+                    self.consecutive_infeasible.get(request.request_id, 0) + 1
+                )
+            else:
+                self.consecutive_skips[request.request_id] = (
+                    self.consecutive_skips.get(request.request_id, 0) + 1
+                )
+                self.consecutive_infeasible[request.request_id] = 0
             if self.block_manager.get_location(request.request_id) == BlockLocation.CPU:
                 self.swapped_queue.append(request)
             else:
@@ -543,9 +572,14 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
         resident_selected = 0
         selected_starved = 0
         eviction_count = 0
+        considered_ids = set()
+        infeasible_ids = set()
+        infeasible_reasons = {}
+        starved_ready = sum(1 for request in ready_requests if self._is_starved(request))
         for request in ordered_requests[:scan_limit]:
+            considered_ids.add(request.request_id)
             was_resident = self._is_resident(request)
-            can_add = self._can_add_to_las_batch(
+            can_add, infeasible_reason = self._check_add_to_las_batch(
                 self.batch_queues[self.cur_index], request, swap_ins_used, budget
             )
             if not can_add and was_resident:
@@ -563,7 +597,7 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
                     protected_ids,
                     min_free_blocks,
                 )
-                can_add = self._can_add_to_las_batch(
+                can_add, infeasible_reason = self._check_add_to_las_batch(
                     self.batch_queues[self.cur_index], request, swap_ins_used, budget
                 )
             if can_add:
@@ -584,15 +618,31 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
                 self.batch_queues[self.cur_index].add_request(request)
                 selected_ids.add(request.request_id)
                 self.consecutive_skips[request.request_id] = 0
+                self.consecutive_infeasible[request.request_id] = 0
                 if len(self.batch_queues[self.cur_index]) >= self.sched_config.max_batch_size:
                     break
+            else:
+                infeasible_ids.add(request.request_id)
+                infeasible_reasons[infeasible_reason] = (
+                    infeasible_reasons.get(infeasible_reason, 0) + 1
+                )
 
-        self._requeue_unselected_requests(ready_requests, selected_ids)
+        self._requeue_unselected_requests(ready_requests, selected_ids, infeasible_ids)
+        policy_skipped = sum(
+            1 for request in ready_requests
+            if request.request_id not in selected_ids
+            and request.request_id not in infeasible_ids
+            and not request.is_finished
+        )
+        infeasible_rounds = len(infeasible_ids)
 
         self.num_iterations += 1
         self.total_sched_time_s += time.perf_counter() - sched_start
         self.total_selected += len(selected_ids)
         self.total_starved_selected += selected_starved
+        self.total_starved_ready += starved_ready
+        self.total_policy_skipped += policy_skipped
+        self.total_infeasible_rounds += infeasible_rounds
         self.total_resident_selected += resident_selected
         self.total_iteration_stall_s += swap_stall_s
         append_phase_metric("decode", "dispatch", {
@@ -600,15 +650,26 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
             "waiting": len(self.waiting_queue),
             "swapped": len(self.swapped_queue),
             "ready": len(ready_requests),
+            "considered": len(considered_ids),
             "selected": len(selected_ids),
+            "policy_skipped": policy_skipped,
+            "infeasible_rounds": infeasible_rounds,
+            "infeasible_batch_size": infeasible_reasons.get("batch_size", 0),
+            "infeasible_token_budget": infeasible_reasons.get("token_budget", 0),
+            "infeasible_gpu_append_blocks": infeasible_reasons.get("gpu_append_blocks", 0),
+            "infeasible_gpu_swap_blocks": infeasible_reasons.get("gpu_swap_blocks", 0),
+            "infeasible_swap_budget": infeasible_reasons.get("swap_budget", 0),
             "resident_selected": resident_selected,
             "resident_admission_ratio": resident_selected / max(len(selected_ids), 1),
+            "starved_ready": starved_ready,
             "starved_selected": selected_starved,
+            "starved_admission_ratio": selected_starved / max(starved_ready, 1),
             "swap_ins": swap_ins_used,
             "swap_in_bytes": swap_in_bytes,
             "iteration_stall_s": swap_stall_s,
             "eviction_count": eviction_count,
             "max_consecutive_skips": max(self.consecutive_skips.values(), default=0),
+            "max_consecutive_infeasible": max(self.consecutive_infeasible.values(), default=0),
             "scan_limit": scan_limit,
             "sched_time_s": time.perf_counter() - sched_start,
             "budget": budget,
@@ -621,6 +682,7 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
         finished = super().pop_finished_requests()
         for request in finished:
             self.consecutive_skips.pop(request.request_id, None)
+            self.consecutive_infeasible.pop(request.request_id, None)
         return finished
 
     async def post_process(self) -> None:
@@ -665,7 +727,11 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
             f"{len(self.waiting_queue)} waiting, {len(self.swapped_queue)} swapped, "
             f"{self.get_processing_num_requests()} processing, "
             f"avg_sched_ms={avg_sched_ms:.3f}, selected={self.total_selected}, "
-            f"starved_selected={self.total_starved_selected}, swap_ins={self.total_swap_ins}, "
+            f"starved_selected={self.total_starved_selected}, "
+            f"starved_ready={self.total_starved_ready}, "
+            f"policy_skipped={self.total_policy_skipped}, "
+            f"infeasible_rounds={self.total_infeasible_rounds}, "
+            f"swap_ins={self.total_swap_ins}, "
             f"swap_in_MB={self.total_swap_in_bytes / (1024 * 1024):.2f}, "
             f"stall_s={self.total_iteration_stall_s:.6f}, "
             f"resident_selected={self.total_resident_selected}, "
