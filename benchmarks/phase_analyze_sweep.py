@@ -29,6 +29,11 @@ METRICS = [
     "phase_context_rho_prefill",
     "phase_context_rho_memory",
     "phase_context_pressure_overshoot",
+    "phase_context_protected_dispatch_ratio",
+    "phase_context_protected_feasible_dispatch_ratio",
+    "phase_context_protected_blocked",
+    "phase_context_protected_wait_p99",
+    "phase_context_long_prompt_max_wait",
     "phase_decode_rho_memory",
     "phase_decode_rho_swap",
     "phase_decode_pressure_overshoot",
@@ -48,6 +53,7 @@ BUCKET_METRICS = [
     "ttft_p90",
     "ttft_p95",
     "ttft_p99",
+    "ttft_max",
     "tpot_p50",
     "tpot_p90",
     "tpot_p95",
@@ -59,6 +65,7 @@ BUCKET_METRICS = [
     "decode_per_output_token_p99",
     "context_queue_p90",
     "context_queue_p99",
+    "context_queue_max",
     "context_exec_p90",
     "context_exec_p99",
     "decode_queue_p90",
@@ -112,6 +119,13 @@ def load_summary(path: Path):
     phase_context_rho_memory = (context.get("rho_memory") or {}).get("mean")
     phase_context_rho_swap = (context.get("rho_swap") or {}).get("mean")
     phase_context_rho_scan = (context.get("rho_scan") or {}).get("mean")
+    phase_context_protected_dispatch_ratio = context.get("protected_dispatch_ratio")
+    phase_context_protected_feasible_dispatch_ratio = context.get("protected_feasible_dispatch_ratio")
+    phase_context_protected_blocked = context.get("protected_blocked")
+    phase_context_protected_wait_p99 = (context.get("protected_wait_s") or {}).get("p99")
+    phase_context_long_prompt_max_wait = (
+        context.get("waiting_long_prompt_max_wait_s") or {}
+    ).get("max")
     return {
         "path": str(path),
         "policy": metadata.get("policy"),
@@ -171,11 +185,21 @@ def load_summary(path: Path):
         "phase_context_rho_memory": phase_context_rho_memory,
         "phase_context_rho_swap": phase_context_rho_swap,
         "phase_context_rho_scan": phase_context_rho_scan,
+        "phase_context_protected_dispatch_ratio": phase_context_protected_dispatch_ratio,
+        "phase_context_protected_feasible_dispatch_ratio": phase_context_protected_feasible_dispatch_ratio,
+        "phase_context_protected_blocked": phase_context_protected_blocked,
+        "phase_context_protected_wait_p99": phase_context_protected_wait_p99,
+        "phase_context_long_prompt_max_wait": phase_context_long_prompt_max_wait,
         "phase_context_pressure_overshoot_mean": phase_context_pressure_overshoot,
         "phase_context_rho_prefill_mean": phase_context_rho_prefill,
         "phase_context_rho_memory_mean": phase_context_rho_memory,
         "phase_context_rho_swap_mean": phase_context_rho_swap,
         "phase_context_rho_scan_mean": phase_context_rho_scan,
+        "phase_context_protected_dispatch_ratio_mean": phase_context_protected_dispatch_ratio,
+        "phase_context_protected_feasible_dispatch_ratio_mean": phase_context_protected_feasible_dispatch_ratio,
+        "phase_context_protected_blocked_mean": phase_context_protected_blocked,
+        "phase_context_protected_wait_p99_mean": phase_context_protected_wait_p99,
+        "phase_context_long_prompt_max_wait_mean": phase_context_long_prompt_max_wait,
         "phase_context_decode_snapshot_used": context.get("decode_snapshot_used"),
         "phase_context_decode_snapshot_stale": context.get("decode_snapshot_stale"),
         "phase_context_decode_snapshot_age_mean": (context.get("decode_snapshot_age_s") or {}).get("mean"),
@@ -237,6 +261,7 @@ def load_bucket_rows(path: Path):
                 row[f"{prefix}_p90"] = stat_value(stats, "p90")
                 row[f"{prefix}_p95"] = stat_value(stats, "p95")
                 row[f"{prefix}_p99"] = stat_value(stats, "p99")
+                row[f"{prefix}_max"] = stat_value(stats, "max")
             rows.append(row)
     return rows
 
@@ -437,6 +462,11 @@ def write_markdown(path: Path, grouped, paired):
             "phase_context_rho_prefill_mean",
             "phase_context_rho_memory_mean",
             "phase_context_pressure_overshoot_mean",
+            "phase_context_protected_dispatch_ratio_mean",
+            "phase_context_protected_feasible_dispatch_ratio_mean",
+            "phase_context_protected_blocked_mean",
+            "phase_context_protected_wait_p99_mean",
+            "phase_context_long_prompt_max_wait_mean",
             "phase_decode_rho_memory_mean",
             "phase_decode_rho_swap_mean",
             "phase_decode_pressure_overshoot_mean",
@@ -479,7 +509,7 @@ def write_bucket_markdown(path: Path, grouped, paired):
             "ttft_p50_mean", "ttft_p90_mean", "ttft_p99_mean",
             "tpot_p50_mean", "tpot_p90_mean", "tpot_p99_mean",
             "e2e_per_output_token_p99_mean", "decode_per_output_token_p99_mean",
-            "context_queue_p90_mean", "decode_queue_p90_mean",
+            "context_queue_p90_mean", "context_queue_max_mean", "decode_queue_p90_mean",
         ]
         f.write("| " + " | ".join(cols) + " |\n")
         f.write("|" + "|".join(["---"] * len(cols)) + "|\n")

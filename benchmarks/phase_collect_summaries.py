@@ -102,6 +102,20 @@ def flatten_summary(path: Path):
     row["phase_context_rho_scan_mean"] = (context.get("rho_scan") or {}).get("mean")
     row["phase_context_selected_mean"] = (context.get("selected") or {}).get("mean")
     row["phase_context_forced_oldest"] = context.get("forced_oldest")
+    row["phase_context_protected_triggered"] = context.get("protected_triggered")
+    row["phase_context_protected_selected"] = context.get("protected_selected")
+    row["phase_context_protected_dispatch_ratio"] = context.get("protected_dispatch_ratio")
+    row["phase_context_protected_feasible_triggers"] = context.get("protected_feasible_triggers")
+    row["phase_context_protected_feasible_dispatch_ratio"] = context.get("protected_feasible_dispatch_ratio")
+    row["phase_context_protected_forced_single"] = context.get("protected_forced_single")
+    row["phase_context_protected_blocked"] = context.get("protected_blocked")
+    row["phase_context_protected_wait_p99"] = (context.get("protected_wait_s") or {}).get("p99")
+    row["phase_context_waiting_max_wait_max"] = (context.get("waiting_max_wait_s") or {}).get("max")
+    row["phase_context_long_prompt_waiting_mean"] = (context.get("waiting_long_prompt_count") or {}).get("mean")
+    row["phase_context_long_prompt_max_wait_max"] = (context.get("waiting_long_prompt_max_wait_s") or {}).get("max")
+    row["phase_context_candidate_max_wait_p99"] = (context.get("candidate_max_wait_s") or {}).get("p99")
+    row["phase_context_selected_max_wait_p99"] = (context.get("selected_max_wait_s") or {}).get("p99")
+    row["phase_context_selected_long_prompt_mean"] = (context.get("selected_long_prompt_count") or {}).get("mean")
     row["phase_context_decode_snapshot_used"] = context.get("decode_snapshot_used")
     row["phase_context_decode_snapshot_stale"] = context.get("decode_snapshot_stale")
     row["phase_context_decode_snapshot_age_mean"] = (context.get("decode_snapshot_age_s") or {}).get("mean")
@@ -147,6 +161,18 @@ def write_markdown(rows, output_path: Path):
         "phase_context_pressure_overshoot_mean",
         "phase_context_rho_prefill_mean",
         "phase_context_rho_memory_mean",
+        "phase_context_protected_triggered",
+        "phase_context_protected_selected",
+        "phase_context_protected_dispatch_ratio",
+        "phase_context_protected_feasible_dispatch_ratio",
+        "phase_context_protected_feasible_triggers",
+        "phase_context_protected_forced_single",
+        "phase_context_protected_blocked",
+        "phase_context_protected_wait_p99",
+        "phase_context_waiting_max_wait_max",
+        "phase_context_long_prompt_waiting_mean",
+        "phase_context_long_prompt_max_wait_max",
+        "phase_context_selected_long_prompt_mean",
         "phase_context_decode_snapshot_used",
     ]
     with output_path.open("w") as f:

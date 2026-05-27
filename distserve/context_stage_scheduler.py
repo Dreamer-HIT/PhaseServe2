@@ -252,6 +252,10 @@ class ContextStageCostCompatibleScheduler(ContextStageFCFSScheduler):
             "PHASESERVE_PREFILL_SCORING_MODE",
             "default",
         ).lower()
+        self.long_prompt_threshold = int(os.environ.get(
+            "PHASESERVE_PREFILL_LONG_PROMPT_TOKENS",
+            "1024",
+        ))
         max_block_margin = int(os.environ.get(
             "PHASESERVE_PBC_MAX_BLOCK_MARGIN",
             str(max(1, int(self.block_manager.max_num_gpu_blocks * 0.10)))
@@ -272,17 +276,60 @@ class ContextStageCostCompatibleScheduler(ContextStageFCFSScheduler):
         self.num_dispatches = 0
         self.total_sched_time_s = 0.0
         self.num_oldest_forced = 0
+        self.num_protected_triggers = 0
+        self.num_protected_selected = 0
+        self.num_protected_forced_single = 0
+        self.num_protected_blocked = 0
 
     def add_request(self, request: Request) -> None:
         request.phaseserve_context_enqueue_time = time.perf_counter()
         self.waiting_queue.append(request)
 
-    def _get_wait_time(self, request: Request) -> float:
-        return time.perf_counter() - getattr(
+    def _get_wait_time(self, request: Request, now: float = None) -> float:
+        now = time.perf_counter() if now is None else now
+        return now - getattr(
             request,
             "phaseserve_context_enqueue_time",
             request.arrival_time,
         )
+
+    def _summarize_waits(self, requests: List[Request], now: float) -> dict:
+        if not requests:
+            return {
+                "count": 0,
+                "max_wait_s": None,
+                "max_wait_prompt_len": None,
+                "max_wait_bucket": None,
+                "long_prompt_count": 0,
+                "long_prompt_max_wait_s": None,
+                "long_prompt_max_wait_prompt_len": None,
+                "long_prompt_max_wait_bucket": None,
+            }
+        rows = [(request, self._get_wait_time(request, now)) for request in requests]
+        max_request, max_wait = max(rows, key=lambda item: item[1])
+        long_rows = [
+            (request, wait)
+            for request, wait in rows
+            if request.get_input_len() >= self.long_prompt_threshold
+        ]
+        if long_rows:
+            long_request, long_wait = max(long_rows, key=lambda item: item[1])
+            long_prompt_len = long_request.get_input_len()
+            long_bucket = self._get_bucket_id(long_request)
+        else:
+            long_wait = None
+            long_prompt_len = None
+            long_bucket = None
+        return {
+            "count": len(requests),
+            "max_wait_s": max_wait,
+            "max_wait_prompt_len": max_request.get_input_len(),
+            "max_wait_bucket": self._get_bucket_id(max_request),
+            "long_prompt_count": len(long_rows),
+            "long_prompt_max_wait_s": long_wait,
+            "long_prompt_max_wait_prompt_len": long_prompt_len,
+            "long_prompt_max_wait_bucket": long_bucket,
+        }
 
     def _get_bucket_id(self, request: Request) -> int:
         length = request.get_input_len()
@@ -416,10 +463,13 @@ class ContextStageCostCompatibleScheduler(ContextStageFCFSScheduler):
             self.sched_config.max_batch_size,
             1,
         )
+        now = time.perf_counter()
         candidate_window = self.waiting_queue[:window_size]
         protected_request = candidate_window[0]
-        protected_wait = self._get_wait_time(protected_request)
+        protected_wait = self._get_wait_time(protected_request, now)
         budget = self._get_context_budget(protected_wait)
+        waiting_waits = self._summarize_waits(self.waiting_queue, now)
+        candidate_waits = self._summarize_waits(candidate_window, now)
 
         buckets = {}
         for request in candidate_window:
@@ -434,7 +484,12 @@ class ContextStageCostCompatibleScheduler(ContextStageFCFSScheduler):
             if len(batch) > 0:
                 candidate_batches.append(batch)
 
-        if protected_wait >= self.dispatch_timeout_s or budget.allow_protected_oldest:
+        protected_due_age = protected_wait >= self.dispatch_timeout_s
+        protected_due_budget = bool(budget.allow_protected_oldest)
+        protected_triggered = protected_due_age or protected_due_budget
+        protected_forced_single = False
+        protected_blocked = False
+        if protected_triggered:
             protected_batches = [
                 batch for batch in candidate_batches
                 if protected_request in batch.requests
@@ -446,7 +501,12 @@ class ContextStageCostCompatibleScheduler(ContextStageFCFSScheduler):
                 if self._is_feasible(forced_batch, protected_request, ignore_pressure_budget=True):
                     forced_batch.add_request(protected_request)
                     candidate_batches = [forced_batch]
+                    protected_forced_single = True
+                else:
+                    candidate_batches = []
+                    protected_blocked = True
             self.num_oldest_forced += 1
+            self.num_protected_triggers += 1
 
         if candidate_batches:
             next_batch = max(
@@ -455,6 +515,14 @@ class ContextStageCostCompatibleScheduler(ContextStageFCFSScheduler):
             )
 
         selected_ids = set([req.request_id for req in next_batch.requests])
+        protected_selected = protected_request.request_id in selected_ids
+        if protected_triggered and protected_selected:
+            self.num_protected_selected += 1
+        if protected_forced_single:
+            self.num_protected_forced_single += 1
+        if protected_blocked:
+            self.num_protected_blocked += 1
+        selected_waits = self._summarize_waits(next_batch.requests, now)
         if selected_ids:
             self.waiting_queue = [
                 req for req in self.waiting_queue
@@ -472,10 +540,25 @@ class ContextStageCostCompatibleScheduler(ContextStageFCFSScheduler):
             "waiting": len(self.waiting_queue),
             "unaccepted": len(self.unaccepted_queue),
             "on_fly_blocks": self.num_on_fly_request_block,
+            "candidate_window": len(candidate_window),
+            "candidate_batches": len(candidate_batches),
             "selected": len(next_batch.requests),
             "selected_prompt_tokens": next_batch.get_num_input_tokens(),
             "max_prefill_tokens": self.sched_config.max_tokens_per_batch,
-            "forced_oldest": protected_wait >= self.dispatch_timeout_s,
+            "forced_oldest": protected_triggered,
+            "protected_triggered": protected_triggered,
+            "protected_due_age": protected_due_age,
+            "protected_due_budget": protected_due_budget,
+            "protected_selected": protected_selected,
+            "protected_forced_single": protected_forced_single,
+            "protected_blocked": protected_blocked,
+            "protected_wait_s": protected_wait,
+            "protected_prompt_len": protected_request.get_input_len(),
+            "protected_bucket": self._get_bucket_id(protected_request),
+            "long_prompt_threshold": self.long_prompt_threshold,
+            "waiting_waits": waiting_waits,
+            "candidate_waits": candidate_waits,
+            "selected_waits": selected_waits,
             "scoring_mode": self.scoring_mode,
             "decode_snapshot": self.last_decode_snapshot,
             "sched_time_s": sched_time_s,
@@ -500,7 +583,9 @@ class ContextStageCostCompatibleScheduler(ContextStageFCFSScheduler):
             f"(context-cost-compatible) {len(self.waiting_queue)} waiting, "
             f"{len(self.unaccepted_queue)} finished but unaccepted, "
             f"{self.num_on_fly_request_block} blocks occupied by on-the-fly requests, "
-            f"avg_sched_ms={avg_sched_ms:.3f}, forced_oldest={self.num_oldest_forced}"
+            f"avg_sched_ms={avg_sched_ms:.3f}, forced_oldest={self.num_oldest_forced}, "
+            f"protected={self.num_protected_selected}/{self.num_protected_triggers}, "
+            f"protected_blocked={self.num_protected_blocked}"
         )
 
 

@@ -113,11 +113,49 @@ def summarize_phase_metrics(path: Optional[str]) -> Dict:
                     prefill_budget_ratios.append(
                         budget.get("prefill_token_budget") / max(max_prefill_tokens, 1)
                     )
+            protected_triggered = sum(1 for r in dispatch_rows if r.get("protected_triggered"))
+            protected_selected = sum(
+                1 for r in dispatch_rows
+                if r.get("protected_triggered") and r.get("protected_selected")
+            )
+            protected_blocked = sum(1 for r in dispatch_rows if r.get("protected_blocked"))
+            protected_feasible_triggers = max(protected_triggered - protected_blocked, 0)
+            waiting_waits = [r.get("waiting_waits") or {} for r in dispatch_rows]
+            candidate_waits = [r.get("candidate_waits") or {} for r in dispatch_rows]
+            selected_waits = [r.get("selected_waits") or {} for r in dispatch_rows]
             by_component[component].update({
                 "prefill_token_budget": summarize([b.get("prefill_token_budget") for b in budgets]),
                 "prefill_budget_ratio": summarize(prefill_budget_ratios),
                 "prefill_block_margin": summarize([b.get("prefill_block_margin") for b in budgets]),
                 "forced_oldest": sum(1 for r in dispatch_rows if r.get("forced_oldest")),
+                "protected_triggered": protected_triggered,
+                "protected_selected": protected_selected,
+                "protected_dispatch_ratio": (
+                    protected_selected / protected_triggered if protected_triggered else None
+                ),
+                "protected_feasible_dispatch_ratio": (
+                    protected_selected / protected_feasible_triggers
+                    if protected_feasible_triggers else None
+                ),
+                "protected_forced_single": sum(1 for r in dispatch_rows if r.get("protected_forced_single")),
+                "protected_blocked": protected_blocked,
+                "protected_feasible_triggers": protected_feasible_triggers,
+                "protected_wait_s": summarize([r.get("protected_wait_s") for r in dispatch_rows]),
+                "candidate_window": summarize([r.get("candidate_window") for r in dispatch_rows]),
+                "candidate_batches": summarize([r.get("candidate_batches") for r in dispatch_rows]),
+                "waiting_max_wait_s": summarize([w.get("max_wait_s") for w in waiting_waits]),
+                "waiting_long_prompt_count": summarize([w.get("long_prompt_count") for w in waiting_waits]),
+                "waiting_long_prompt_max_wait_s": summarize([
+                    w.get("long_prompt_max_wait_s") for w in waiting_waits
+                ]),
+                "candidate_max_wait_s": summarize([w.get("max_wait_s") for w in candidate_waits]),
+                "candidate_long_prompt_max_wait_s": summarize([
+                    w.get("long_prompt_max_wait_s") for w in candidate_waits
+                ]),
+                "selected_max_wait_s": summarize([w.get("max_wait_s") for w in selected_waits]),
+                "selected_long_prompt_count": summarize([
+                    w.get("long_prompt_count") for w in selected_waits
+                ]),
                 "decode_snapshot_used": sum(1 for r in dispatch_rows if (r.get("decode_snapshot") or {}).get("used")),
                 "decode_snapshot_stale": sum(1 for r in dispatch_rows if (r.get("decode_snapshot") or {}).get("stale")),
                 "decode_snapshot_age_s": summarize([
