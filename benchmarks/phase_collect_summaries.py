@@ -76,10 +76,21 @@ def flatten_summary(path: Path):
     row["phase_decode_max_skip_max"] = (decode.get("max_consecutive_skips") or {}).get("max")
     row["phase_decode_mode_switch_rate_mean"] = (decode.get("controller_mode_switch_rate") or {}).get("mean")
     row["phase_decode_budget_delta_mean"] = (decode.get("controller_budget_delta") or {}).get("mean")
+    row["phase_decode_pressure_overshoot_mean"] = (decode.get("pressure_overshoot") or {}).get("mean")
+    row["phase_decode_rho_prefill_mean"] = (decode.get("rho_prefill") or {}).get("mean")
+    row["phase_decode_rho_memory_mean"] = (decode.get("rho_memory") or {}).get("mean")
+    row["phase_decode_rho_swap_mean"] = (decode.get("rho_swap") or {}).get("mean")
+    row["phase_decode_rho_scan_mean"] = (decode.get("rho_scan") or {}).get("mean")
     row["phase_context_prefill_budget_mean"] = (context.get("prefill_token_budget") or {}).get("mean")
     row["phase_context_prefill_budget_ratio_mean"] = (context.get("prefill_budget_ratio") or {}).get("mean")
+    row["phase_context_prefill_block_margin_mean"] = (context.get("prefill_block_margin") or {}).get("mean")
     row["phase_context_mode_switch_rate_mean"] = (context.get("controller_mode_switch_rate") or {}).get("mean")
     row["phase_context_budget_delta_mean"] = (context.get("controller_budget_delta") or {}).get("mean")
+    row["phase_context_pressure_overshoot_mean"] = (context.get("pressure_overshoot") or {}).get("mean")
+    row["phase_context_rho_prefill_mean"] = (context.get("rho_prefill") or {}).get("mean")
+    row["phase_context_rho_memory_mean"] = (context.get("rho_memory") or {}).get("mean")
+    row["phase_context_rho_swap_mean"] = (context.get("rho_swap") or {}).get("mean")
+    row["phase_context_rho_scan_mean"] = (context.get("rho_scan") or {}).get("mean")
     row["phase_context_selected_mean"] = (context.get("selected") or {}).get("mean")
     row["phase_context_forced_oldest"] = context.get("forced_oldest")
     row["phase_context_decode_snapshot_used"] = context.get("decode_snapshot_used")
@@ -109,10 +120,17 @@ def write_markdown(rows, output_path: Path):
         "phase_decode_evictions",
         "phase_decode_scan_mean",
         "phase_decode_selected_mean",
+        "phase_decode_pressure_overshoot_mean",
+        "phase_decode_rho_memory_mean",
+        "phase_decode_rho_swap_mean",
         "phase_context_prefill_budget_mean",
         "phase_context_prefill_budget_ratio_mean",
+        "phase_context_prefill_block_margin_mean",
         "phase_context_mode_switch_rate_mean",
         "phase_context_budget_delta_mean",
+        "phase_context_pressure_overshoot_mean",
+        "phase_context_rho_prefill_mean",
+        "phase_context_rho_memory_mean",
         "phase_context_decode_snapshot_used",
     ]
     with output_path.open("w") as f:

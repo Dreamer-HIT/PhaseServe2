@@ -90,6 +90,11 @@ def summarize_phase_metrics(path: Optional[str]) -> Dict:
                 for mode in sorted({b.get("mode") for b in budgets if b.get("mode")})
             },
             "rho_down": summarize([b.get("rho_down") for b in budgets]),
+            "rho_prefill": summarize([b.get("rho_prefill") for b in budgets]),
+            "rho_memory": summarize([b.get("rho_memory") for b in budgets]),
+            "rho_swap": summarize([b.get("rho_swap") for b in budgets]),
+            "rho_scan": summarize([b.get("rho_scan") for b in budgets]),
+            "pressure_overshoot": summarize([b.get("pressure_overshoot") for b in budgets]),
             "pressure_bridge": summarize([p.get("bridge") for p in pressures]),
             "pressure_decode": summarize([p.get("decode") for p in pressures]),
             "pressure_kv": summarize([p.get("kv") for p in pressures]),
@@ -98,6 +103,7 @@ def summarize_phase_metrics(path: Optional[str]) -> Dict:
             "sched_time_s": summarize([r.get("sched_time_s") for r in dispatch_rows]),
             "controller_mode_switch_rate": summarize([c.get("mode_switch_rate") for c in controllers]),
             "controller_budget_delta": summarize([c.get("last_budget_delta") for c in controllers]),
+            "controller_pressure_overshoot": summarize([c.get("last_pressure_overshoot") for c in controllers]),
         }
         if component == "context":
             prefill_budget_ratios = []

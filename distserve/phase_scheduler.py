@@ -52,6 +52,16 @@ class AdmissionBudget:
     decode_scan_limit: int
     allow_protected_oldest: bool
     pressures: Dict[str, float]
+    pressure_bridge: float = 0.0
+    pressure_decode: float = 0.0
+    pressure_kv: float = 0.0
+    pressure_swap: float = 0.0
+    pressure_age: float = 0.0
+    rho_prefill: float = 0.0
+    rho_memory: float = 0.0
+    rho_swap: float = 0.0
+    rho_scan: float = 0.0
+    pressure_overshoot: float = 0.0
 
 
 class PressureBudgetController:
@@ -74,12 +84,12 @@ class PressureBudgetController:
             "PHASESERVE_PBC_DISABLE_DYNAMIC",
             "0",
         ).lower() in {"1", "true", "yes", "on"}
-        self.weights = [
-            _env_float("PHASESERVE_PBC_W_BRIDGE", 1.0),
-            _env_float("PHASESERVE_PBC_W_DECODE", 1.0),
-            _env_float("PHASESERVE_PBC_W_KV", 1.0),
-            _env_float("PHASESERVE_PBC_W_SWAP", 1.0),
-        ]
+        self.weights = {
+            "bridge": _env_float("PHASESERVE_PBC_W_BRIDGE", 1.0),
+            "decode": _env_float("PHASESERVE_PBC_W_DECODE", 1.0),
+            "kv": _env_float("PHASESERVE_PBC_W_KV", 1.0),
+            "swap": _env_float("PHASESERVE_PBC_W_SWAP", 1.0),
+        }
 
         self.max_prefill_tokens = max(max_prefill_tokens, 0)
         default_min_prefill = int(self.max_prefill_tokens * _env_float("PHASESERVE_PBC_MIN_PREFILL_FRAC", 0.50))
@@ -103,20 +113,64 @@ class PressureBudgetController:
         self.num_updates = 0
         self.num_mode_switches = 0
         self.last_budget_delta = 0.0
+        self.last_pressure_overshoot = 0.0
+
+    def _aggregate_keys(self, pressures: Dict[str, float], keys) -> float:
+        values = [pressures.get(key, 0.0) for key in keys]
+        if not values:
+            return 0.0
+        if self.aggregation == "weighted":
+            denom = sum(self.weights.get(key, 1.0) for key in keys) or 1.0
+            return clamp(
+                sum(self.weights.get(key, 1.0) * value for key, value in zip(keys, values))
+                / denom
+            )
+        if self.aggregation == "lexicographic":
+            for key in ["kv", "swap", "bridge", "decode"]:
+                if key in keys:
+                    return clamp(max(pressures.get(key, 0.0), max(values)))
+            return clamp(max(values))
+        return clamp(max(values))
 
     def _aggregate(self, pressures: Dict[str, float]) -> float:
-        values = [
-            pressures.get("bridge", 0.0),
-            pressures.get("decode", 0.0),
-            pressures.get("kv", 0.0),
-            pressures.get("swap", 0.0),
-        ]
-        if self.aggregation == "weighted":
-            denom = sum(self.weights) or 1.0
-            return clamp(sum(w * v for w, v in zip(self.weights, values)) / denom)
-        if self.aggregation == "lexicographic":
-            return clamp(max(values[2], values[3], values[0], values[1]))
-        return clamp(max(values))
+        return self._aggregate_keys(pressures, ["bridge", "decode", "kv", "swap"])
+
+    def _make_budget(
+        self,
+        mode: str,
+        normalized: Dict[str, float],
+        rho_down: float,
+        rho_prefill: float,
+        rho_memory: float,
+        rho_swap: float,
+        rho_scan: float,
+        prefill_token_budget: int,
+        prefill_block_margin: int,
+        decode_swap_budget_per_iter: int,
+        decode_scan_limit: int,
+    ) -> AdmissionBudget:
+        pressure_overshoot = max(rho_down - self.rho_high, 0.0)
+        return AdmissionBudget(
+            mode=mode,
+            rho_down=rho_down,
+            prefill_token_budget=max(prefill_token_budget, 0),
+            prefill_block_margin=max(prefill_block_margin, 0),
+            prefer_small_kv_footprint=mode == "BACKPRESSURE" or rho_memory >= self.rho_high,
+            decode_swap_budget_per_iter=max(decode_swap_budget_per_iter, 0),
+            decode_scan_limit=max(decode_scan_limit, 1) if self.max_decode_scan else 0,
+            allow_protected_oldest=normalized.get("age", 0.0) >= 1.0,
+            pressures=normalized,
+            pressure_bridge=normalized.get("bridge", 0.0),
+            pressure_decode=normalized.get("decode", 0.0),
+            pressure_kv=normalized.get("kv", 0.0),
+            pressure_swap=normalized.get("swap", 0.0),
+            pressure_age=normalized.get("age", 0.0),
+            rho_prefill=rho_prefill,
+            rho_memory=rho_memory,
+            rho_swap=rho_swap,
+            rho_scan=rho_scan,
+            pressure_overshoot=pressure_overshoot,
+        )
 
     def _smooth_int(self, previous: int, raw: int) -> int:
         smoothed = self.smooth_lambda * previous + (1.0 - self.smooth_lambda) * raw
@@ -126,21 +180,26 @@ class PressureBudgetController:
         mode = "STATIC"
         if mode != self.previous_mode:
             self.num_mode_switches += 1
-        budget = AdmissionBudget(
+        rho_down = self._aggregate(normalized)
+        budget = self._make_budget(
             mode=mode,
-            rho_down=0.0,
+            normalized=normalized,
+            rho_down=rho_down,
+            rho_prefill=self._aggregate_keys(normalized, ["bridge", "decode"]),
+            rho_memory=self._aggregate_keys(normalized, ["kv", "swap"]),
+            rho_swap=normalized.get("swap", 0.0),
+            rho_scan=self._aggregate_keys(normalized, ["kv", "swap"]),
             prefill_token_budget=self.max_prefill_tokens,
             prefill_block_margin=max(self.min_prefill_block_margin, 0),
-            prefer_small_kv_footprint=False,
             decode_swap_budget_per_iter=max(self.max_decode_swap_budget, 0),
             decode_scan_limit=max(self.max_decode_scan, 1) if self.max_decode_scan else 0,
-            allow_protected_oldest=normalized.get("age", 0.0) >= 1.0,
-            pressures=normalized,
         )
+        budget.prefer_small_kv_footprint = False
         self.previous_budget = budget
         self.previous_mode = mode
         self.num_updates += 1
         self.last_budget_delta = 0.0
+        self.last_pressure_overshoot = budget.pressure_overshoot
         return budget
 
     def update(self, pressures: Dict[str, float]) -> AdmissionBudget:
@@ -149,6 +208,10 @@ class PressureBudgetController:
             return self._static_budget(normalized)
 
         rho_down = self._aggregate(normalized)
+        rho_prefill = self._aggregate_keys(normalized, ["bridge", "decode"])
+        rho_memory = self._aggregate_keys(normalized, ["kv", "swap"])
+        rho_swap = normalized.get("swap", 0.0)
+        rho_scan = rho_memory
         if rho_down >= self.rho_high:
             mode = "BACKPRESSURE"
         elif rho_down <= self.rho_low:
@@ -158,21 +221,19 @@ class PressureBudgetController:
 
         prefill_raw = int(round(
             self.min_prefill_tokens
-            + (1.0 - rho_down) * (self.max_prefill_tokens - self.min_prefill_tokens)
+            + (1.0 - rho_prefill) * (self.max_prefill_tokens - self.min_prefill_tokens)
         )) if self.max_prefill_tokens else 0
         block_margin_raw = int(round(
             self.min_prefill_block_margin
-            + rho_down * (self.max_prefill_block_margin - self.min_prefill_block_margin)
+            + rho_memory * (self.max_prefill_block_margin - self.min_prefill_block_margin)
         )) if self.max_prefill_block_margin else 0
-        swap_pressure = normalized.get("swap", 0.0)
         decode_swap_raw = int(round(
             self.min_decode_swap_budget
-            + (1.0 - swap_pressure) * (self.max_decode_swap_budget - self.min_decode_swap_budget)
+            + (1.0 - rho_swap) * (self.max_decode_swap_budget - self.min_decode_swap_budget)
         )) if self.max_decode_swap_budget else 0
-        decode_scan_pressure = max(normalized.get("kv", 0.0), normalized.get("swap", 0.0))
         decode_scan_raw = int(round(
             self.min_decode_scan
-            + (1.0 - decode_scan_pressure) * (self.max_decode_scan - self.min_decode_scan)
+            + (1.0 - rho_scan) * (self.max_decode_scan - self.min_decode_scan)
         )) if self.max_decode_scan else 0
 
         if self.previous_budget is not None:
@@ -199,20 +260,23 @@ class PressureBudgetController:
         if mode != self.previous_mode:
             self.num_mode_switches += 1
 
-        budget = AdmissionBudget(
+        budget = self._make_budget(
             mode=mode,
+            normalized=normalized,
             rho_down=rho_down,
-            prefill_token_budget=max(prefill_budget, 0),
-            prefill_block_margin=max(block_margin, 0),
-            prefer_small_kv_footprint=mode == "BACKPRESSURE",
-            decode_swap_budget_per_iter=max(decode_swap_budget, 0),
-            decode_scan_limit=max(decode_scan_limit, 1) if self.max_decode_scan else 0,
-            allow_protected_oldest=normalized.get("age", 0.0) >= 1.0,
-            pressures=normalized,
+            rho_prefill=rho_prefill,
+            rho_memory=rho_memory,
+            rho_swap=rho_swap,
+            rho_scan=rho_scan,
+            prefill_token_budget=prefill_budget,
+            prefill_block_margin=block_margin,
+            decode_swap_budget_per_iter=decode_swap_budget,
+            decode_scan_limit=decode_scan_limit,
         )
         self.previous_budget = budget
         self.previous_mode = mode
         self.num_updates += 1
+        self.last_pressure_overshoot = budget.pressure_overshoot
         return budget
 
     def metrics(self) -> Dict[str, float]:
@@ -221,6 +285,7 @@ class PressureBudgetController:
             "num_mode_switches": self.num_mode_switches,
             "mode_switch_rate": self.num_mode_switches / max(self.num_updates, 1),
             "last_budget_delta": self.last_budget_delta,
+            "last_pressure_overshoot": self.last_pressure_overshoot,
         }
 
 

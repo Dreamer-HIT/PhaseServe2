@@ -23,6 +23,15 @@ METRICS = [
     "tpot_p95",
     "tpot_p99",
     "latency_p99",
+    "phase_context_prefill_budget",
+    "phase_context_prefill_budget_ratio",
+    "phase_context_prefill_block_margin",
+    "phase_context_rho_prefill",
+    "phase_context_rho_memory",
+    "phase_context_pressure_overshoot",
+    "phase_decode_rho_memory",
+    "phase_decode_rho_swap",
+    "phase_decode_pressure_overshoot",
 ]
 
 BUCKET_METRICS = [
@@ -78,6 +87,19 @@ def load_summary(path: Path):
     phase_components = (data.get("phase_metrics") or {}).get("components") or {}
     decode = phase_components.get("decode") or {}
     context = phase_components.get("context") or {}
+    phase_decode_pressure_overshoot = (decode.get("pressure_overshoot") or {}).get("mean")
+    phase_decode_rho_prefill = (decode.get("rho_prefill") or {}).get("mean")
+    phase_decode_rho_memory = (decode.get("rho_memory") or {}).get("mean")
+    phase_decode_rho_swap = (decode.get("rho_swap") or {}).get("mean")
+    phase_decode_rho_scan = (decode.get("rho_scan") or {}).get("mean")
+    phase_context_prefill_budget = (context.get("prefill_token_budget") or {}).get("mean")
+    phase_context_prefill_budget_ratio = (context.get("prefill_budget_ratio") or {}).get("mean")
+    phase_context_prefill_block_margin = (context.get("prefill_block_margin") or {}).get("mean")
+    phase_context_pressure_overshoot = (context.get("pressure_overshoot") or {}).get("mean")
+    phase_context_rho_prefill = (context.get("rho_prefill") or {}).get("mean")
+    phase_context_rho_memory = (context.get("rho_memory") or {}).get("mean")
+    phase_context_rho_swap = (context.get("rho_swap") or {}).get("mean")
+    phase_context_rho_scan = (context.get("rho_scan") or {}).get("mean")
     return {
         "path": str(path),
         "policy": metadata.get("policy"),
@@ -106,10 +128,34 @@ def load_summary(path: Path):
         "phase_decode_selected_mean": (decode.get("selected") or {}).get("mean"),
         "phase_decode_mode_switch_rate_mean": (decode.get("controller_mode_switch_rate") or {}).get("mean"),
         "phase_decode_budget_delta_mean": (decode.get("controller_budget_delta") or {}).get("mean"),
-        "phase_context_prefill_budget_mean": (context.get("prefill_token_budget") or {}).get("mean"),
-        "phase_context_prefill_budget_ratio_mean": (context.get("prefill_budget_ratio") or {}).get("mean"),
+        "phase_decode_pressure_overshoot": phase_decode_pressure_overshoot,
+        "phase_decode_rho_prefill": phase_decode_rho_prefill,
+        "phase_decode_rho_memory": phase_decode_rho_memory,
+        "phase_decode_rho_swap": phase_decode_rho_swap,
+        "phase_decode_rho_scan": phase_decode_rho_scan,
+        "phase_decode_pressure_overshoot_mean": phase_decode_pressure_overshoot,
+        "phase_decode_rho_prefill_mean": phase_decode_rho_prefill,
+        "phase_decode_rho_memory_mean": phase_decode_rho_memory,
+        "phase_decode_rho_swap_mean": phase_decode_rho_swap,
+        "phase_decode_rho_scan_mean": phase_decode_rho_scan,
+        "phase_context_prefill_budget": phase_context_prefill_budget,
+        "phase_context_prefill_budget_ratio": phase_context_prefill_budget_ratio,
+        "phase_context_prefill_block_margin": phase_context_prefill_block_margin,
+        "phase_context_prefill_budget_mean": phase_context_prefill_budget,
+        "phase_context_prefill_budget_ratio_mean": phase_context_prefill_budget_ratio,
+        "phase_context_prefill_block_margin_mean": phase_context_prefill_block_margin,
         "phase_context_mode_switch_rate_mean": (context.get("controller_mode_switch_rate") or {}).get("mean"),
         "phase_context_budget_delta_mean": (context.get("controller_budget_delta") or {}).get("mean"),
+        "phase_context_pressure_overshoot": phase_context_pressure_overshoot,
+        "phase_context_rho_prefill": phase_context_rho_prefill,
+        "phase_context_rho_memory": phase_context_rho_memory,
+        "phase_context_rho_swap": phase_context_rho_swap,
+        "phase_context_rho_scan": phase_context_rho_scan,
+        "phase_context_pressure_overshoot_mean": phase_context_pressure_overshoot,
+        "phase_context_rho_prefill_mean": phase_context_rho_prefill,
+        "phase_context_rho_memory_mean": phase_context_rho_memory,
+        "phase_context_rho_swap_mean": phase_context_rho_swap,
+        "phase_context_rho_scan_mean": phase_context_rho_scan,
         "phase_context_decode_snapshot_used": context.get("decode_snapshot_used"),
         "phase_context_decode_snapshot_stale": context.get("decode_snapshot_stale"),
         "phase_context_decode_snapshot_age_mean": (context.get("decode_snapshot_age_s") or {}).get("mean"),
@@ -355,6 +401,23 @@ def write_markdown(path: Path, grouped, paired):
             "ttft_p50_mean", "ttft_p90_mean", "ttft_p99_mean",
             "tpot_p50_mean", "tpot_p90_mean", "tpot_p99_mean",
             "goodput_req_s_std", "tpot_p99_std",
+        ]
+        f.write("| " + " | ".join(cols) + " |\n")
+        f.write("|" + "|".join(["---"] * len(cols)) + "|\n")
+        for row in grouped:
+            f.write("| " + " | ".join(fmt(row.get(c)) for c in cols) + " |\n")
+        f.write("\n## Phase Diagnostics\n\n")
+        cols = [
+            "rate", "policy", "n",
+            "phase_context_prefill_budget_mean",
+            "phase_context_prefill_budget_ratio_mean",
+            "phase_context_prefill_block_margin_mean",
+            "phase_context_rho_prefill_mean",
+            "phase_context_rho_memory_mean",
+            "phase_context_pressure_overshoot_mean",
+            "phase_decode_rho_memory_mean",
+            "phase_decode_rho_swap_mean",
+            "phase_decode_pressure_overshoot_mean",
         ]
         f.write("| " + " | ".join(cols) + " |\n")
         f.write("|" + "|".join(["---"] * len(cols)) + "|\n")
