@@ -1,6 +1,6 @@
 # Cross-Stage PBC Validation
 
-更新时间：2026-05-26
+更新时间：2026-05-27
 
 ## 目的
 
@@ -115,8 +115,33 @@ PHASESERVE_PBC_MIN_PREFILL_FRAC=0.75
 
 > PBC converts downstream decode pressure into a prefill admission budget. It can reduce decode-side tail pressure and sometimes improve TTFT p99/output throughput, but its benefit depends on the pressure-to-budget mapping and should be evaluated as a stability/control mechanism rather than an unconditional latency optimizer.
 
+## Decode-Heavy 后续验证
+
+结果目录：
+
+- `/root/data/phase_scheduler_results/decode_heavy2_20260527_083845`
+
+完整记录：
+
+- `docs/decode_heavy_validation.md`
+
+在 decode-heavy workload 中，`phase` 相比 `bps_kas` 的 paired 结果如下：
+
+| Rate | Goodput delta | SLO delta | Output tok/s ratio | TTFT p90 delta | TTFT p99 delta | TPOT p90 ratio | TPOT p99 ratio |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 0 | +0.0154 | +1.04 pp | 1.004 | +4.886 | -0.0227 | 0.795 | 0.854 |
+| 2 | -0.0075 | 0.00 pp | 0.990 | -0.0008 | -0.0046 | 0.994 | 0.990 |
+
+这说明 PBC 的现有实现具备真实控制效果，但当前映射仍偏粗：
+
+1. burst decode-heavy 下，PBC 可以降低 TPOT tail，并小幅提升 SLO/goodput。
+2. 同时它会牺牲 TTFT p90，说明 prefill budget 收缩的时机和强度仍需优化。
+3. rate2 下 PBC 与静态 `bps_kas` 基本持平，说明稳定压力下主要收益来自 KAS，而不是动态 PBC。
+
+因此后续论文中，PBC 更适合作为 cross-stage stability/control 组件，而不是单独的主性能优化组件。
+
 ## 下一步
 
-1. 设计 decode-heavy workload，让 decode pressure 更强，否则 rate4 下 `phase` 与 `bps_kas` 太接近，PBC 信号弱。
-2. 修改 PBC 映射：不要只用 `max(bridge, decode, kv, swap)`，而是区分 `kv/swap` 对 prefill token budget 和 block margin 的影响，避免 TTFT p90 被过度牺牲。
-3. 做 5-seed PBC 验证，并报告 `prefill_budget_ratio`、`budget_delta`、`mode_switch_rate`、`pressure_decode/kv/swap`。
+1. 修改 PBC 映射：不要只用 `max(bridge, decode, kv, swap)`，而是区分 `decode_queue`、`kv_blocks`、`swap_pressure` 对 prefill token budget 和 block margin 的影响，避免 TTFT p90 被过度牺牲。
+2. 做 5-seed PBC 验证，并报告 `prefill_budget_ratio`、`budget_delta`、`mode_switch_rate`、`pressure_decode/kv/swap`。
+3. 增加 long-output stress，用来判断 PBC 是否会系统性牺牲 `>512` output bucket。

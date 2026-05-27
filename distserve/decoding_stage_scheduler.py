@@ -421,20 +421,20 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
         )
         return self.current_budget
 
-    def _get_append_blocks_needed_safe(self, request: Request) -> int:
-        if self.block_manager.get_location(request.request_id) != BlockLocation.GPU:
-            return 0
-        append_needed = max(self.block_manager.get_num_append_blocks_needed(request), 0)
+    def _estimate_append_blocks_needed(self, request: Request) -> int:
         allocated_blocks = self.block_manager.get_allocated_num_blocks(request.request_id)
         future_len = request.get_input_len() + request.get_output_len() + 1
         block_size = self.block_manager.cache_config.block_size
         next_token_blocks = (future_len + block_size - 1) // block_size
-        append_needed = max(
-            append_needed,
-            next_token_blocks - allocated_blocks,
-            self.append_block_margin,
+        return max(next_token_blocks - allocated_blocks, self.append_block_margin, 0)
+
+    def _get_append_blocks_needed_safe(self, request: Request) -> int:
+        if self.block_manager.get_location(request.request_id) != BlockLocation.GPU:
+            return 0
+        return max(
+            self.block_manager.get_num_append_blocks_needed(request),
+            self._estimate_append_blocks_needed(request),
         )
-        return append_needed
 
     def _can_add_to_las_batch(self, batch: BatchedRequests, request: Request, swap_ins_used: int, budget) -> bool:
         if len(batch) >= self.sched_config.max_batch_size:
@@ -459,7 +459,13 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
         if swap_ins_used >= swap_budget:
             return False
         blocks_to_swap_in = self.block_manager.get_allocated_num_blocks(request.request_id)
-        return blocks_to_swap_in + selected_append_needed <= self.block_manager.get_num_avail_gpu_blocks()
+        append_needed = self._estimate_append_blocks_needed(request)
+        return (
+            blocks_to_swap_in
+            + append_needed
+            + selected_append_needed
+            <= self.block_manager.get_num_avail_gpu_blocks()
+        )
 
     def _evict_resident_requests_for_blocks(
         self,

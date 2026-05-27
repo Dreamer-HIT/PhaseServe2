@@ -1,6 +1,6 @@
 # Bucket Breakdown Validation
 
-更新时间：2026-05-26
+更新时间：2026-05-27
 
 ## 目的
 
@@ -122,8 +122,34 @@ python3 benchmarks/phase_analyze_sweep.py \
 
 这比只放全局 p50/p90/p99 更像系统论文，因为它解释了每个组件改善了哪类请求、是否把成本转移给了另一类请求。
 
+## Decode-Heavy 补充验证
+
+decode-heavy workload 已经按上面的要求补充，记录在：
+
+- `docs/decode_heavy_validation.md`
+- `/root/data/phase_scheduler_results/decode_heavy2_20260527_083845`
+
+新证据强化了 KAS 的归因：
+
+| Rate | Policy | Output bucket | TPOT p99 ratio vs FCFS | 观察 |
+|---:|---|---|---:|---|
+| 2 | kas | `(64,128]` | 0.524 | 主流输出长度显著改善 |
+| 2 | kas | `(128,256]` | 0.611 | 主流输出长度显著改善 |
+| 2 | kas | `(256,512]` | 0.716 | 中长输出改善 |
+| 2 | kas | `>512` | 1.412 | 超长输出变差，仍需专项 stress |
+| 2 | phase | `(64,128]` | 0.511 | 主流输出长度显著改善 |
+| 2 | phase | `(128,256]` | 0.581 | 主流输出长度显著改善 |
+| 2 | phase | `(256,512]` | 0.728 | 中长输出改善 |
+| 2 | phase | `>512` | 1.400 | 超长输出变差，仍需专项 stress |
+
+这把 KAS 的 claim 收敛为：
+
+> KAS reduces TPOT tail for dominant decode-heavy output buckets and improves generated-token throughput, while ultra-long outputs still require explicit fairness safeguards.
+
+PBC 的 bucket 结果也说明，full-system 方法不是“所有 bucket 都提升”：burst 下 `phase` 相比 `bps_kas` 改善 `(64,128]` 和 `(128,256]` 的 SLO/TPOT，但会牺牲 `(256,512]` 和 `>512` 的 TTFT。主文需要把这个作为控制策略的 trade-off 报告。
+
 ## 下一步
 
 1. BPS：跑 `rates=4/6/8`，只保留 `fcfs/bps/bps_kas`，用 prompt bucket TTFT 作为主表。
-2. KAS：设计 decode-heavy workload，把 output mix 提高到 `64/128/256/512`，用 output bucket TPOT 作为主表。
-3. PBC：只在 `phase vs bps_kas` 中讨论，观察 bucket-level SLO 是否更稳，而不是单独 claim 性能主收益。
+2. KAS：把 decode-heavy 扩到 5 seeds，并增加 long-output stress，用 output bucket TPOT 作为主表。
+3. PBC：只在 `phase vs bps_kas` 中讨论，报告 SLO/goodput/throughput 和 TTFT trade-off，而不是单独 claim 性能主收益。
