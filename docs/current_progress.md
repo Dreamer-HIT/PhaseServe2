@@ -1,10 +1,10 @@
 # PhaseServe 当前进度与下一步计划
 
-更新时间：2026-05-30
+更新时间：2026-05-31
 
 ## 一句话状态
 
-PhaseServe 的方法论和代码已收敛到 `typed/regime-aware PBC + BPS + bridge-budgeted KAS`：PBC 负责 typed pressure-to-budget、regime ownership 和 first/decode 冲突仲裁，BPS 作为 first-token/prefill 侧 TTFT owner，KAS 作为 decode 侧 TPOT owner，并在 bridge/first-token pressure 下扩大 admission feasibility budget。最新 OPT-13B + ShareGPT 128-request seed0 已在 global rate `2.0-4.0` 连续区间内同时让 TTFT 与 TPOT 至少两个分位超过 20% 改善；该区间在 1P1D/2 GPU 下对应 per-GPU rate `1.0-2.0`。High-rate 边界显示 `4.5` 和 `6.0` 存在 TPOT 断点，因此主图区间暂定 `2.0-4.0`；下一步是补 seed1/seed2 和核心消融。
+PhaseServe 的方法论和代码已收敛到 `typed/regime-aware PBC + BPS + bridge-budgeted KAS`：PBC 负责 typed pressure-to-budget、regime ownership 和 first/decode 冲突仲裁，BPS 作为 first-token/prefill 侧 TTFT owner，KAS 作为 decode 侧 TPOT owner，并在 bridge/first-token pressure 下扩大 admission feasibility budget、保留 first-decode 进度，同时只提升 near-completion decode 请求来释放 KV。最新 OPT-13B + ShareGPT 128-request seed0 已达到 strict 2-wide 内部目标：在 per-GPU rate `1.0/1.5/2.0/2.5/3.0`，PhaseServe 相比 DistServe/FCFS 在每个点都让 TTFT 与 TPOT 各至少两个 `p50/p90/p95/p99` 分位改善 `>=20%`。该结果是 Stage 4L seed0 收敛点；下一步是补 seed1/seed2、做核心消融和 LLaMA2-13B 复验。
 
 ## 文档地图
 
@@ -190,13 +190,13 @@ BPS 已输出 selected batch 的 `token_fill/pad_waste/block_risk` 和 protected
 
 ## 下一步计划
 
-当前处于 Stage 4L：OPT-13B + ShareGPT Layer 1 主端到端修复已经得到 seed0 连续有效区间。根据对 `related_papers/` 中 DistServe、WindServe 和 ShuffleInfer 的重新审阅，后续正式实验仍以 `docs/experiment_protocol.md` 为准：主端到端实验回到 `ShareGPT` / `LongBench` 真实长度分布，先做 DistServe-only baseline calibration，再在相同 pressure window 下比较 PhaseServe。workload 已明确分为三层：Layer 1 真实主端到端 workload、Layer 2 ShuffleInfer-style controlled regime workload、Layer 3 诊断与 stress workload。既有 mixed-wide / cross-skew / first-128 mixed-order 结果保留为 exploratory 和机制线索，不再作为唯一主实验设计来源。
+当前处于 Stage 4L：OPT-13B + ShareGPT Layer 1 主端到端修复已经得到 seed0 strict 2-wide 连续有效区间。根据对 `related_papers/` 中 DistServe、WindServe 和 ShuffleInfer 的重新审阅，后续正式实验仍以 `docs/experiment_protocol.md` 为准：主端到端实验回到 `ShareGPT` / `LongBench` 真实长度分布，先做 DistServe-only baseline calibration，再在相同 pressure window 下比较 PhaseServe。workload 已明确分为三层：Layer 1 真实主端到端 workload、Layer 2 ShuffleInfer-style controlled regime workload、Layer 3 诊断与 stress workload。既有 mixed-wide / cross-skew / first-128 mixed-order 结果保留为 exploratory 和机制线索，不再作为唯一主实验设计来源。
 
-当前内部优化目标仍保留为 strict 2-wide：在 Layer 1 主端到端真实 workload 上，找到至少一个长度为 `2.0 req/s/GPU`、粒度至少为 `0.5 req/s/GPU` 的连续 per-GPU rate 区间；该区间内每个点，PhaseServe 相比 DistServe 在 TTFT 的 `p50/p90/p95/p99` 中至少两个指标改善 `>=20%`，并在 TPOT 的 `p50/p90/p95/p99` 中至少两个指标改善 `>=20%`。该目标是内部收敛标准，不是预先承诺的论文 claim；若真实 workload 无法满足，需要先完成测量、pressure window、实现对齐和方法 claim 审计，再决定是否把 strict 2-wide 目标移动到 Layer 2 Mixed-pressure controlled regime 或收窄 Layer 1 claim。
+当前 strict 2-wide 内部优化目标已经在 OPT-13B + ShareGPT seed0 达成：在 Layer 1 主端到端真实 workload 上，per-GPU `1.0-3.0 req/s/GPU`、粒度 `0.5 req/s/GPU` 的连续区间内，每个点 PhaseServe 相比 DistServe 在 TTFT 的 `p50/p90/p95/p99` 中至少两个指标改善 `>=20%`，并在 TPOT 的 `p50/p90/p95/p99` 中至少两个指标改善 `>=20%`。该目标仍是内部收敛标准，不是预先承诺的论文 claim；正式 claim 需要 seed 扩展、消融和 LLaMA2-13B 复验支撑。
 
 下一步不应继续盲目搜索 workload 或 rate，而应按下面顺序推进：
 
-1. Stage 4L seed 扩展：在 global rate `2.0-4.0` 主图区间补 seed1/seed2，至少形成两 seed 结果。
+1. Stage 4L seed 扩展：在 per-GPU rate `1.0-3.0` strict 2-wide 区间补 seed1/seed2，至少形成两 seed 结果。
 2. E3 消融：在代表性 pressure rate 上跑 `w/o PBC`、`w/o BPS`、`w/o KAS` 和 full PhaseServe。
 3. High-rate 机制分析：解释 global rate `4.5/6.0` 为什么 TTFT 仍强但 TPOT 出现断点。
 4. LLaMA2-13B 复验：在 `LLaMA2-13B + ShareGPT` 和 `LLaMA2-13B + LongBench` 上检查 bridge-budgeted KAS 默认值是否稳定。
@@ -244,6 +244,7 @@ Stage 4 当前状态：
 21. 已完成 OPT-13B + ShareGPT 128-request TPOT 诊断和 KAS bridge 修复。结果目录包括 `/root/data/phase_scheduler_results/opt13b_sharegpt_tpot_diag128_20260529_224028`、`/root/data/phase_scheduler_results/opt13b_sharegpt_conflict_first128_r140c_20260530_1010`、`/root/data/phase_scheduler_results/opt13b_sharegpt_conflict_first128_r15_20260530_100008`、`/root/data/phase_scheduler_results/opt13b_sharegpt_conflict_first128_r15_seed1_20260530_1015`。诊断显示 early Phase 在 global rate `1.5` 出现 decode queue 被清空、bridge/unaccepted queue 积压的 pressure transfer，导致 TTFT tail 变差。最终修复包括：KAS `starved` primary、bridge-dominant eviction、PBC `FIRST_DECODE_CONFLICT_POLICY=first`、KAS bridge completion drain，并关闭失败的 HOL bypass / short-output fastlane 默认值。seed0 global rate `1.5` 的 final `phase` 相比 FCFS 同时改善 TTFT p50/p90/p95/p99 `5.3%/4.4%/6.2%/10.3%`、TPOT p50/p90/p95/p99 `19.6%/34.3%/18.8%/48.3%`，SLO 从 `59.4%` 提升到 `71.1%`，goodput +`13.9%`；seed1 global rate `1.5` 进一步改善 TTFT p50/p90/p95/p99 `7.0%/1.2%/0.1%/7.3%`，TPOT p50/p90/p95/p99 `3.9%/23.1%/38.2%/27.0%`，SLO +`1.56 pp`。下一步需要扩 `1.40/1.50` 的 seed/rate，并决定端到端主图的 percentile 选择。详见 `docs/archive/stages/stage4i_tpot_diagnostic_and_kas_bridge_repair.md`。
 22. 已完成最终默认代码的 OPT-13B + ShareGPT 128-request per-GPU `1-5` 两 seed 复测。结果目录：`/root/data/phase_scheduler_results/opt13b_sharegpt_final128_pergpu1to5_20260530_111232`。两 seed 平均显示 per-GPU `1` 是最干净正向窗口：SLO +`8.2 pp`，goodput +`0.075 req/s`，TTFT p50/p90/p95/p99 下降 `36.3%/34.6%/30.8%/26.5%`，TPOT p50/p90/p95/p99 下降 `7.1%/14.5%/29.7%/3.6%`。per-GPU `2-4` 已进入明显过载，Phase 仍改善 TTFT tail 和 TPOT p95/p99，但 SLO/goodput/TPOT p90 不总是提升；per-GPU `5` 属于 overload/failure-boundary。结论是 Stage 4H 的 64-request per-GPU `1-5` 不能直接作为最终主图区间，后续主图应围绕 per-GPU `0.75/1.0/1.25/1.5` 细扫。详见 `docs/archive/stages/stage4j_opt_sharegpt_final128_pergpu1to5.md`。
 23. 已完成 OPT-13B + ShareGPT first-128 mixed-order 端到端窗口验证。新增 `remote_distserve/benchmarks/phase_make_sharegpt_mixed_order.py`，保持 ShareGPT first `128` 请求集合不变，只交错 long-prompt、long-output、short-prompt/long-output 请求来构造 mixed pressure。KAS completion-aware 默认值已更新为 `PHASESERVE_KAS_BRIDGE_COMPLETION_PRESSURE=0.0`、`PHASESERVE_KAS_BRIDGE_COMPLETION_REMAINING=0`。在 global rate `1.9`，两 seed 平均 TTFT p90/p95/p99 下降 `53.5%/67.5%/67.7%`，TPOT p90/p95/p99 下降 `27.7%/27.9%/25.4%`；在 global rate `2.0`，两 seed 平均 TTFT p90/p95/p99 下降 `79.7%/74.8%/46.8%`，TPOT p90/p95/p99 下降 `26.1%/22.4%/20.2%`。global rate `2.1` 的 TTFT 仍强，但 TPOT 只剩 p95 超过 20%，因此当前主 positive window 是 global `1.9-2.0`（per-GPU `0.95-1.0`）。同时已按更严格的 “Per-GPU rate 区间长度为 2、粒度 0.5” 检查 per-GPU `0.5/1.0/1.5/2.0/2.5`，seed0 即显示该 strict 2-wide 目标未达成：低 rate TTFT 无压力，高 rate TPOT/TTFT tail 不能同时保持两个指标超过 20%。详见 `docs/archive/stages/stage4k_opt_sharegpt_mixed_order_window.md`。
+24. 已完成 Stage 4L strict per-GPU 2-wide 目标的 seed0 收敛。新增 `remote_distserve/benchmarks/phase_window_goal.py` 统一检查“TTFT 与 TPOT 各至少两个分位改善 `>=20%`”和连续 per-GPU window；修复 `remote_distserve/benchmarks/phase_make_sharegpt_mixed_order.py` 中 tuple 格式长度解析错误，并补充可选 output/total-token 过滤与 metadata requests。核心代码改动在 KAS bridge completion drain：默认 `PHASESERVE_KAS_BRIDGE_COMPLETION_FIRST_DECODE_FRAC=0.75`，并新增 `PHASESERVE_KAS_BRIDGE_COMPLETION_PROMOTE_REMAINING=8`，只让 near-completion non-first decode 请求插到 reserved first-decode quota 之后；同时把 bridge-drain 组内排序改为 resident、near-completion、remaining-output 优先于 starved，避免长输出 starved 请求压过只剩几个 token 的请求。最终 seed0 在 per-GPU `1.0/1.5/2.0/2.5/3.0` 全部达标，形成 `1.0-3.0 req/s/GPU` 的 strict 2-wide 区间。详见 `docs/stage4l_opt_sharegpt_bridge_budget_repair.md`。
 
 ## 当前风险判断
 
@@ -260,3 +261,4 @@ Stage 4 当前状态：
 9. OPT-13B + ShareGPT 128-request 诊断暴露出的 bridge/unaccepted pressure transfer 已通过 conflict-first PBC 与 KAS bridge completion drain 初步修复，并已有 seed1 rate `1.5` 复验；当前风险转为扩 seed/rate 和图表 claim 收窄，而不是默认策略仍会秒级恶化。
 10. OPT-13B + ShareGPT 128-request 的 per-GPU `1-5` 复测显示，最终代码的最干净正向窗口集中在 per-GPU `1` 附近；per-GPU `2-5` 在 128-request 下已经是过载压力扫描，不能按 64-request Phase512 旧表解释为同质主图区间。
 11. first-128 mixed-order trace 已经给出 TTFT/TPOT 同窗口改善，但它是 ShareGPT-derived arrival-order workload，不是原始 first-order trace；论文中必须把它表述为 mixed-pressure trace，并补 LLaMA2-13B 复验与 KAS completion-aware drain 消融。
+12. Stage 4L seed0 strict 2-wide 结果已经达成内部优化目标，但它仍不能直接写成论文最终结论；必须继续检查 seed1/seed2、消融和 LLaMA2-13B，确认 near-completion promotion 不是 seed/workload 偶然现象。

@@ -548,9 +548,13 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
             "PHASESERVE_KAS_BRIDGE_COMPLETION_REMAINING",
             "0",
         ))
+        self.bridge_completion_promote_remaining_threshold = int(os.environ.get(
+            "PHASESERVE_KAS_BRIDGE_COMPLETION_PROMOTE_REMAINING",
+            "8",
+        ))
         self.bridge_completion_first_decode_frac = float(os.environ.get(
             "PHASESERVE_KAS_BRIDGE_COMPLETION_FIRST_DECODE_FRAC",
-            "1.0",
+            "0.75",
         ))
         self.bridge_completion_first_decode_min = int(os.environ.get(
             "PHASESERVE_KAS_BRIDGE_COMPLETION_FIRST_DECODE_MIN",
@@ -897,17 +901,22 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
                 if self.use_starved_tiebreak and self.use_starved_primary
                 else False
             )
+            completion_threshold = (
+                self.bridge_completion_promote_remaining_threshold
+                if self.bridge_completion_promote_remaining_threshold > 0
+                else self.bridge_completion_remaining_threshold
+            )
             short_remaining_key = (
-                remaining_output > self.bridge_completion_remaining_threshold
-                if self.bridge_completion_remaining_threshold > 0
+                remaining_output > completion_threshold
+                if completion_threshold > 0
                 else False
             )
             return (
-                starved_primary_key,
                 not self._is_first_decode_step(request),
                 not self._is_resident(request),
                 short_remaining_key,
                 remaining_output,
+                starved_primary_key,
                 -allocated_blocks,
                 getattr(request, "phaseserve_decode_ready_time", request.arrival_time),
                 request.request_id,
@@ -995,10 +1004,25 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
         first_decode.sort(key=sort_key)
         non_first_decode.sort(key=sort_key)
         first_quota = self._bridge_completion_first_decode_quota()
+        if self.bridge_completion_promote_remaining_threshold > 0:
+            promoted_non_first = []
+            deferred_non_first = []
+            for request in non_first_decode:
+                if (
+                    self._remaining_output_len(request)
+                    <= self.bridge_completion_promote_remaining_threshold
+                ):
+                    promoted_non_first.append(request)
+                else:
+                    deferred_non_first.append(request)
+            non_first_decode = promoted_non_first
+        else:
+            deferred_non_first = []
         return (
             first_decode[:first_quota]
             + non_first_decode
             + first_decode[first_quota:]
+            + deferred_non_first
         )
 
     def _decode_hard_pressure(self) -> Tuple[float, float, float]:
@@ -1697,6 +1721,7 @@ class DecodingStageKVAwareLASScheduler(DecodingStageFCFSScheduler):
             "bridge_completion_drain_active": bridge_completion_drain_active,
             "bridge_completion_pressure_threshold": self.bridge_completion_pressure_threshold,
             "bridge_completion_remaining_threshold": self.bridge_completion_remaining_threshold,
+            "bridge_completion_promote_remaining_threshold": self.bridge_completion_promote_remaining_threshold,
             "bridge_completion_first_decode_frac": self.bridge_completion_first_decode_frac,
             "bridge_completion_first_decode_quota": (
                 self._bridge_completion_first_decode_quota()
