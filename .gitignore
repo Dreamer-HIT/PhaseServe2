@@ -1,0 +1,32 @@
+# LaTeX temporary files
+/PhaseServe.pdf
+*.aux
+*.bbl
+*.blg
+*.log
+*.out
+*.toc
+*.lof
+*.lot
+*.synctex.gz
+*.fls
+*.fdb_latexmk
+
+# macOS metadata
+.DS_Store
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Runtime and benchmark heavy artifacts
+*.jsonl
+*.exp
+*.pid
+server.log
+pressure_snapshot.json
+phase_metrics.jsonl
+
+# Local temporary output
+tmp/
+logs/

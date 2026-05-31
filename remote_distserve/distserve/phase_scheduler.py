@@ -1,0 +1,694 @@
+import json
+import math
+import os
+import time
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Dict, Optional
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
+    return max(low, min(high, value))
+
+
+def ratio(value: float, target: float) -> float:
+    if target <= 0:
+        return 0.0
+    return clamp(value / target)
+
+
+def _json_safe(value):
+    if hasattr(value, "__dataclass_fields__"):
+        return asdict(value)
+    if isinstance(value, dict):
+        return {key: _json_safe(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(val) for val in value]
+    return value
+
+
+@dataclass
+class AdmissionBudget:
+    mode: str
+    regime: str
+    rho_down: float
+    prefill_token_budget: int
+    prefill_block_margin: int
+    prefer_small_kv_footprint: bool
+    decode_swap_budget_per_iter: int
+    decode_scan_limit: int
+    decode_utility_intensity: float
+    ttft_debt_weight: float
+    allow_protected_oldest: bool
+    pressures: Dict[str, float]
+    pressure_bridge: float = 0.0
+    pressure_first: float = 0.0
+    pressure_decode: float = 0.0
+    pressure_kv: float = 0.0
+    pressure_swap: float = 0.0
+    pressure_decode_hard: float = 0.0
+    pressure_kv_hard: float = 0.0
+    pressure_age: float = 0.0
+    rho_prefill: float = 0.0
+    rho_memory: float = 0.0
+    rho_swap: float = 0.0
+    rho_scan: float = 0.0
+    rho_hard: float = 0.0
+    pressure_overshoot: float = 0.0
+    pressure_potential: float = 0.0
+    pressure_injection_prefill: float = 0.0
+    pressure_injection_decode_swap: float = 0.0
+    goodput_capacity: float = 1.0
+    smooth_cost: float = 0.0
+    progress_debt: float = 0.0
+
+
+class PressureBudgetController:
+    """Lightweight pressure-to-budget controller for PhaseServe experiments."""
+
+    def __init__(
+        self,
+        component: str,
+        max_prefill_tokens: int = 0,
+        max_prefill_block_margin: int = 0,
+        max_decode_scan: int = 0,
+        max_decode_swap_budget: int = 0,
+    ):
+        self.component = component
+        self.rho_low = _env_float("PHASESERVE_PBC_RHO_LOW", 0.55)
+        self.rho_high = _env_float("PHASESERVE_PBC_RHO_HIGH", 0.75)
+        self.smooth_lambda = _env_float("PHASESERVE_PBC_SMOOTH_LAMBDA", 0.8)
+        self.aggregation = os.environ.get("PHASESERVE_PBC_AGG", "max")
+        self.disable_dynamic = os.environ.get(
+            "PHASESERVE_PBC_DISABLE_DYNAMIC",
+            "0",
+        ).lower() in {"1", "true", "yes", "on"}
+        self.weights = {
+            "bridge": _env_float("PHASESERVE_PBC_W_BRIDGE", 1.0),
+            "first": _env_float("PHASESERVE_PBC_W_FIRST", 1.0),
+            "decode": _env_float("PHASESERVE_PBC_W_DECODE", 1.0),
+            "kv": _env_float("PHASESERVE_PBC_W_KV", 1.0),
+            "swap": _env_float("PHASESERVE_PBC_W_SWAP", 1.0),
+        }
+        self.theta = {
+            "bridge": _env_float("PHASESERVE_PBC_THETA_BRIDGE", self.rho_high),
+            "first": _env_float("PHASESERVE_PBC_THETA_FIRST", self.rho_high),
+            "decode": _env_float("PHASESERVE_PBC_THETA_DECODE", self.rho_high),
+            "kv": _env_float("PHASESERVE_PBC_THETA_KV", self.rho_high),
+            "swap": _env_float("PHASESERVE_PBC_THETA_SWAP", self.rho_high),
+        }
+
+        self.max_prefill_tokens = max(max_prefill_tokens, 0)
+        default_min_prefill = int(self.max_prefill_tokens * _env_float("PHASESERVE_PBC_MIN_PREFILL_FRAC", 0.50))
+        self.min_prefill_tokens = _env_int("PHASESERVE_PBC_MIN_PREFILL_TOKENS", default_min_prefill)
+        self.prefill_progress_floor_frac = clamp(
+            _env_float("PHASESERVE_PBC_PREFILL_PROGRESS_FLOOR_FRAC", 0.90)
+        )
+        self.first_token_prefill_floor_frac = clamp(
+            _env_float("PHASESERVE_PBC_FIRST_TOKEN_PREFILL_FLOOR_FRAC", 1.0)
+        )
+        self.prefill_hard_pressure_threshold = clamp(
+            _env_float("PHASESERVE_PBC_PREFILL_HARD_PRESSURE_THRESHOLD", 0.25)
+        )
+        self.regime_hard_pressure_threshold = clamp(
+            _env_float(
+                "PHASESERVE_PBC_REGIME_HARD_PRESSURE_THRESHOLD",
+                self.prefill_hard_pressure_threshold,
+            )
+        )
+        self.decode_soft_prefill_weight = clamp(
+            _env_float("PHASESERVE_PBC_DECODE_SOFT_PREFILL_WEIGHT", 0.0)
+        )
+        self.kv_soft_margin_weight = clamp(
+            _env_float("PHASESERVE_PBC_KV_SOFT_MARGIN_WEIGHT", 0.0)
+        )
+        self.max_prefill_block_margin = max_prefill_block_margin
+        self.min_prefill_block_margin = _env_int("PHASESERVE_PBC_MIN_BLOCK_MARGIN", 0)
+
+        self.max_decode_scan = max(max_decode_scan, 0)
+        default_min_decode_scan = int(round(
+            self.max_decode_scan * _env_float("PHASESERVE_PBC_MIN_DECODE_SCAN_FRAC", 0.75)
+        ))
+        self.min_decode_scan = min(
+            self.max_decode_scan,
+            max(_env_int("PHASESERVE_PBC_MIN_DECODE_SCAN", default_min_decode_scan), 1),
+        )
+        self.max_decode_swap_budget = max(max_decode_swap_budget, 0)
+        self.min_decode_swap_budget = _env_int("PHASESERVE_PBC_MIN_SWAP_BUDGET", 0)
+        self.decode_intensity_low_pressure = clamp(_env_float(
+            "PHASESERVE_PBC_DECODE_INTENSITY_LOW_PRESSURE",
+            _env_float("PHASESERVE_KAS_INTENSITY_LOW", 0.45),
+        ))
+        self.decode_intensity_high_pressure = clamp(_env_float(
+            "PHASESERVE_PBC_DECODE_INTENSITY_HIGH_PRESSURE",
+            _env_float("PHASESERVE_KAS_INTENSITY_HIGH", 0.75),
+        ))
+        self.decode_intensity_bridge_discount = clamp(_env_float(
+            "PHASESERVE_PBC_DECODE_INTENSITY_BRIDGE_DISCOUNT",
+            _env_float("PHASESERVE_KAS_INTENSITY_BRIDGE_DISCOUNT", 0.25),
+        ))
+        self.ttft_debt_weight_scale = clamp(_env_float(
+            "PHASESERVE_PBC_TTFT_DEBT_WEIGHT",
+            1.0,
+        ))
+        self.ttft_debt_min_pressure = clamp(_env_float(
+            "PHASESERVE_PBC_TTFT_DEBT_MIN_PRESSURE",
+            0.25,
+        ))
+        self.first_decode_conflict_policy = os.environ.get(
+            "PHASESERVE_PBC_FIRST_DECODE_CONFLICT_POLICY",
+            "first",
+        ).strip().lower()
+
+        self.previous_mode = "OPEN"
+        self.previous_regime = "MIXED_SLO"
+        self.previous_budget: Optional[AdmissionBudget] = None
+        self.num_updates = 0
+        self.num_mode_switches = 0
+        self.num_regime_switches = 0
+        self.last_budget_delta = 0.0
+        self.last_intensity_delta = 0.0
+        self.last_pressure_overshoot = 0.0
+        self.last_pressure_potential = 0.0
+        self.last_goodput_capacity = 1.0
+        self.last_progress_debt = 0.0
+        self.last_decode_utility_intensity = 1.0
+        self.last_ttft_debt_weight = 0.0
+
+    def _aggregate_keys(self, pressures: Dict[str, float], keys) -> float:
+        values = [pressures.get(key, 0.0) for key in keys]
+        if not values:
+            return 0.0
+        if self.aggregation == "weighted":
+            denom = sum(self.weights.get(key, 1.0) for key in keys) or 1.0
+            return clamp(
+                sum(self.weights.get(key, 1.0) * value for key, value in zip(keys, values))
+                / denom
+            )
+        if self.aggregation == "lexicographic":
+            for key in ["kv", "swap", "first", "bridge", "decode"]:
+                if key in keys:
+                    return clamp(max(pressures.get(key, 0.0), max(values)))
+            return clamp(max(values))
+        return clamp(max(values))
+
+    def _aggregate(self, pressures: Dict[str, float]) -> float:
+        return self._aggregate_keys(pressures, ["bridge", "first", "decode", "kv", "swap"])
+
+    def _pressure_potential(self, normalized: Dict[str, float]) -> float:
+        potential = 0.0
+        for key in ["bridge", "first", "decode", "kv", "swap"]:
+            debt = max(normalized.get(key, 0.0) - self.theta.get(key, self.rho_high), 0.0)
+            potential += self.weights.get(key, 1.0) * debt * debt
+        return potential
+
+    def _classify_regime(
+        self,
+        first_token_pressure: float,
+        decode_tail_pressure: float,
+        hard_pressure: float,
+    ) -> str:
+        if hard_pressure >= self.regime_hard_pressure_threshold:
+            return "KV_SWAP_LIMITED"
+        if first_token_pressure >= self.rho_high and decode_tail_pressure >= self.rho_high:
+            if self.first_decode_conflict_policy in {"decode", "decode_heavy"}:
+                return "DECODE_HEAVY"
+            if self.first_decode_conflict_policy in {"first", "first_token"}:
+                return "FIRST_TOKEN_LIMITED"
+            return "MIXED_SLO"
+        if first_token_pressure >= self.rho_high and decode_tail_pressure < self.rho_high:
+            return "FIRST_TOKEN_LIMITED"
+        if decode_tail_pressure >= self.rho_high:
+            return "DECODE_HEAVY"
+        return "MIXED_SLO"
+
+    def _decode_utility_intensity(
+        self,
+        regime: str,
+        first_token_pressure: float,
+        decode_tail_pressure: float,
+        hard_pressure: float,
+        swap_pressure: float,
+    ) -> float:
+        if regime == "KV_SWAP_LIMITED" or hard_pressure >= self.regime_hard_pressure_threshold:
+            return 1.0
+        local_decode_pressure = max(decode_tail_pressure, swap_pressure)
+        denom = max(
+            self.decode_intensity_high_pressure - self.decode_intensity_low_pressure,
+            1e-6,
+        )
+        pressure_intensity = clamp(
+            (local_decode_pressure - self.decode_intensity_low_pressure) / denom
+        )
+        if regime == "DECODE_HEAVY":
+            return clamp(max(hard_pressure, pressure_intensity))
+        bridge_scale = max(
+            1.0 - self.decode_intensity_bridge_discount * clamp(first_token_pressure),
+            0.0,
+        )
+        return clamp(max(hard_pressure, pressure_intensity * bridge_scale))
+
+    def _ttft_debt_weight(
+        self,
+        regime: str,
+        first_token_pressure: float,
+        hard_pressure: float,
+    ) -> float:
+        if hard_pressure >= self.regime_hard_pressure_threshold:
+            return 0.0
+        if regime == "KV_SWAP_LIMITED" or regime == "DECODE_HEAVY":
+            return 0.0
+        if first_token_pressure <= 0.0:
+            return 0.0
+        debt_pressure = max(first_token_pressure, self.ttft_debt_min_pressure)
+        return clamp(self.ttft_debt_weight_scale * debt_pressure * (1.0 - hard_pressure))
+
+    def _goodput_capacity(
+        self,
+        prefill_token_budget: int,
+        prefill_block_margin: int,
+        decode_swap_budget_per_iter: int,
+        decode_scan_limit: int,
+    ) -> float:
+        capacities = []
+        if self.max_prefill_tokens:
+            capacities.append(prefill_token_budget / max(self.max_prefill_tokens, 1))
+        if self.max_prefill_block_margin:
+            capacities.append(1.0 - prefill_block_margin / max(self.max_prefill_block_margin, 1))
+        if self.max_decode_swap_budget:
+            capacities.append(decode_swap_budget_per_iter / max(self.max_decode_swap_budget, 1))
+        if self.max_decode_scan:
+            capacities.append(decode_scan_limit / max(self.max_decode_scan, 1))
+        if not capacities:
+            return 1.0
+        return clamp(sum(capacities) / len(capacities))
+
+    def _make_budget(
+        self,
+        mode: str,
+        regime: str,
+        normalized: Dict[str, float],
+        rho_down: float,
+        rho_prefill: float,
+        rho_memory: float,
+        rho_swap: float,
+        rho_scan: float,
+        rho_hard: float,
+        prefill_token_budget: int,
+        prefill_block_margin: int,
+        decode_swap_budget_per_iter: int,
+        decode_scan_limit: int,
+        decode_utility_intensity: float,
+        ttft_debt_weight: float,
+    ) -> AdmissionBudget:
+        pressure_overshoot = max(rho_down - self.rho_high, 0.0)
+        pressure_potential = self._pressure_potential(normalized)
+        goodput_capacity = self._goodput_capacity(
+            prefill_token_budget,
+            prefill_block_margin,
+            decode_swap_budget_per_iter,
+            decode_scan_limit,
+        )
+        progress_debt = normalized.get("age", 0.0)
+        return AdmissionBudget(
+            mode=mode,
+            regime=regime,
+            rho_down=rho_down,
+            prefill_token_budget=max(prefill_token_budget, 0),
+            prefill_block_margin=max(prefill_block_margin, 0),
+            prefer_small_kv_footprint=(
+                mode == "BACKPRESSURE"
+                or regime == "KV_SWAP_LIMITED"
+                or rho_memory >= self.rho_high
+            ),
+            decode_swap_budget_per_iter=max(decode_swap_budget_per_iter, 0),
+            decode_scan_limit=max(decode_scan_limit, 1) if self.max_decode_scan else 0,
+            decode_utility_intensity=clamp(decode_utility_intensity),
+            ttft_debt_weight=clamp(ttft_debt_weight),
+            allow_protected_oldest=normalized.get("age", 0.0) >= 1.0,
+            pressures=normalized,
+            pressure_bridge=normalized.get("bridge", 0.0),
+            pressure_first=normalized.get("first", 0.0),
+            pressure_decode=normalized.get("decode", 0.0),
+            pressure_kv=normalized.get("kv", 0.0),
+            pressure_swap=normalized.get("swap", 0.0),
+            pressure_decode_hard=normalized.get("decode_hard", 0.0),
+            pressure_kv_hard=normalized.get("kv_hard", 0.0),
+            pressure_age=normalized.get("age", 0.0),
+            rho_prefill=rho_prefill,
+            rho_memory=rho_memory,
+            rho_swap=rho_swap,
+            rho_scan=rho_scan,
+            rho_hard=rho_hard,
+            pressure_overshoot=pressure_overshoot,
+            pressure_potential=pressure_potential,
+            goodput_capacity=goodput_capacity,
+            smooth_cost=self.last_budget_delta,
+            progress_debt=progress_debt,
+        )
+
+    def _smooth_int(self, previous: int, raw: int) -> int:
+        smoothed = self.smooth_lambda * previous + (1.0 - self.smooth_lambda) * raw
+        return int(round(smoothed))
+
+    def _smooth_float(self, previous: float, raw: float) -> float:
+        return self.smooth_lambda * previous + (1.0 - self.smooth_lambda) * raw
+
+    def _static_budget(self, normalized: Dict[str, float]) -> AdmissionBudget:
+        mode = "STATIC"
+        if mode != self.previous_mode:
+            self.num_mode_switches += 1
+        regime = "STATIC"
+        if regime != self.previous_regime:
+            self.num_regime_switches += 1
+        rho_down = self._aggregate(normalized)
+        budget = self._make_budget(
+            mode=mode,
+            regime=regime,
+            normalized=normalized,
+            rho_down=rho_down,
+            rho_prefill=self._aggregate_keys(normalized, ["bridge", "first", "decode"]),
+            rho_memory=self._aggregate_keys(normalized, ["kv", "swap"]),
+            rho_swap=normalized.get("swap", 0.0),
+            rho_scan=self._aggregate_keys(normalized, ["kv", "swap"]),
+            rho_hard=max(
+                normalized.get("decode_hard", 0.0),
+                normalized.get("kv_hard", 0.0),
+                normalized.get("swap", 0.0),
+            ),
+            prefill_token_budget=self.max_prefill_tokens,
+            prefill_block_margin=max(self.min_prefill_block_margin, 0),
+            decode_swap_budget_per_iter=max(self.max_decode_swap_budget, 0),
+            decode_scan_limit=max(self.max_decode_scan, 1) if self.max_decode_scan else 0,
+            decode_utility_intensity=1.0,
+            ttft_debt_weight=0.0,
+        )
+        budget.prefer_small_kv_footprint = False
+        budget.smooth_cost = 0.0
+        self.previous_budget = budget
+        self.previous_mode = mode
+        self.previous_regime = regime
+        self.num_updates += 1
+        self.last_budget_delta = 0.0
+        self.last_intensity_delta = 0.0
+        self.last_pressure_overshoot = budget.pressure_overshoot
+        self.last_pressure_potential = budget.pressure_potential
+        self.last_goodput_capacity = budget.goodput_capacity
+        self.last_progress_debt = budget.progress_debt
+        self.last_decode_utility_intensity = budget.decode_utility_intensity
+        self.last_ttft_debt_weight = budget.ttft_debt_weight
+        return budget
+
+    def update(self, pressures: Dict[str, float]) -> AdmissionBudget:
+        normalized = {key: clamp(float(value)) for key, value in pressures.items()}
+        if self.disable_dynamic:
+            return self._static_budget(normalized)
+
+        rho_down_raw = self._aggregate(normalized)
+        rho_prefill_raw = self._aggregate_keys(normalized, ["bridge", "first", "decode"])
+        rho_memory_raw = self._aggregate_keys(normalized, ["kv", "swap"])
+        rho_swap = normalized.get("swap", 0.0)
+        rho_scan = rho_memory_raw
+        first_token_pressure = max(normalized.get("first", 0.0), normalized.get("bridge", 0.0))
+        decode_tail_pressure = normalized.get("decode", 0.0)
+
+        if self.component == "context":
+            decode_hard = max(
+                normalized.get("decode_hard", 0.0),
+                normalized.get("swap", 0.0),
+            )
+            kv_hard = max(
+                normalized.get("kv_hard", 0.0),
+                normalized.get("swap", 0.0),
+            )
+            decode_soft = normalized.get("decode", 0.0) * self.decode_soft_prefill_weight
+            kv_soft = normalized.get("kv", 0.0) * self.kv_soft_margin_weight
+            decode_tail_pressure = max(decode_hard, decode_soft)
+            rho_prefill = self._aggregate_keys(
+                {
+                    "bridge": normalized.get("bridge", 0.0),
+                    "first": normalized.get("first", 0.0),
+                    "decode": max(decode_hard, decode_soft),
+                },
+                ["bridge", "first", "decode"],
+            )
+            rho_memory = self._aggregate_keys(
+                {
+                    "kv": max(kv_hard, kv_soft),
+                    "swap": normalized.get("swap", 0.0),
+                },
+                ["kv", "swap"],
+            )
+            rho_down = max(rho_prefill, rho_memory, normalized.get("age", 0.0))
+            hard_pressure = max(decode_hard, kv_hard, normalized.get("swap", 0.0))
+        else:
+            rho_down = rho_down_raw
+            rho_prefill = rho_prefill_raw
+            rho_memory = rho_memory_raw
+            hard_pressure = max(
+                normalized.get("decode_hard", 0.0),
+                normalized.get("kv_hard", 0.0),
+                rho_swap,
+            )
+        hard_pressure = max(hard_pressure, normalized.get("swap", 0.0))
+        regime = self._classify_regime(
+            first_token_pressure,
+            decode_tail_pressure,
+            hard_pressure,
+        )
+        decode_utility_raw = self._decode_utility_intensity(
+            regime,
+            first_token_pressure,
+            decode_tail_pressure,
+            hard_pressure,
+            rho_swap,
+        )
+        ttft_debt_raw = self._ttft_debt_weight(
+            regime,
+            first_token_pressure,
+            hard_pressure,
+        )
+
+        if rho_down >= self.rho_high:
+            mode = "BACKPRESSURE"
+        elif rho_down <= self.rho_low:
+            mode = "OPEN"
+        else:
+            mode = self.previous_mode or "BALANCED"
+
+        prefill_raw = int(round(
+            self.min_prefill_tokens
+            + (1.0 - rho_prefill) * (self.max_prefill_tokens - self.min_prefill_tokens)
+        )) if self.max_prefill_tokens else 0
+        if (
+            self.component == "context"
+            and self.max_prefill_tokens
+            and hard_pressure <= self.prefill_hard_pressure_threshold
+        ):
+            floor_frac = self.prefill_progress_floor_frac
+            if regime == "FIRST_TOKEN_LIMITED":
+                floor_frac = max(floor_frac, self.first_token_prefill_floor_frac)
+            progress_floor = int(round(self.max_prefill_tokens * floor_frac))
+            prefill_raw = max(prefill_raw, progress_floor)
+        block_margin_raw = int(round(
+            self.min_prefill_block_margin
+            + rho_memory * (self.max_prefill_block_margin - self.min_prefill_block_margin)
+        )) if self.max_prefill_block_margin else 0
+        decode_swap_raw = int(round(
+            self.min_decode_swap_budget
+            + (1.0 - rho_swap) * (self.max_decode_swap_budget - self.min_decode_swap_budget)
+        )) if self.max_decode_swap_budget else 0
+        decode_scan_raw = int(round(
+            self.min_decode_scan
+            + (1.0 - rho_scan) * (self.max_decode_scan - self.min_decode_scan)
+        )) if self.max_decode_scan else 0
+
+        if self.previous_budget is not None:
+            prefill_budget = self._smooth_int(self.previous_budget.prefill_token_budget, prefill_raw)
+            block_margin = self._smooth_int(self.previous_budget.prefill_block_margin, block_margin_raw)
+            decode_swap_budget = self._smooth_int(
+                self.previous_budget.decode_swap_budget_per_iter,
+                decode_swap_raw,
+            )
+            decode_scan_limit = self._smooth_int(self.previous_budget.decode_scan_limit, decode_scan_raw)
+            if (
+                regime == "KV_SWAP_LIMITED"
+                or decode_utility_raw >= self.previous_budget.decode_utility_intensity
+            ):
+                decode_utility_intensity = decode_utility_raw
+            else:
+                decode_utility_intensity = self._smooth_float(
+                    self.previous_budget.decode_utility_intensity,
+                    decode_utility_raw,
+                )
+            if (
+                regime in {"DECODE_HEAVY", "KV_SWAP_LIMITED"}
+                or hard_pressure >= self.regime_hard_pressure_threshold
+                or ttft_debt_raw >= self.previous_budget.ttft_debt_weight
+            ):
+                ttft_debt_weight = ttft_debt_raw
+            else:
+                ttft_debt_weight = self._smooth_float(
+                    self.previous_budget.ttft_debt_weight,
+                    ttft_debt_raw,
+                )
+            self.last_intensity_delta = abs(
+                decode_utility_intensity - self.previous_budget.decode_utility_intensity
+            )
+            self.last_budget_delta = math.sqrt(
+                (prefill_budget - self.previous_budget.prefill_token_budget) ** 2
+                + (block_margin - self.previous_budget.prefill_block_margin) ** 2
+                + (decode_swap_budget - self.previous_budget.decode_swap_budget_per_iter) ** 2
+                + (decode_scan_limit - self.previous_budget.decode_scan_limit) ** 2
+                + self.last_intensity_delta ** 2
+                + (ttft_debt_weight - self.previous_budget.ttft_debt_weight) ** 2
+            )
+        else:
+            prefill_budget = prefill_raw
+            block_margin = block_margin_raw
+            decode_swap_budget = decode_swap_raw
+            decode_scan_limit = decode_scan_raw
+            decode_utility_intensity = decode_utility_raw
+            ttft_debt_weight = ttft_debt_raw
+            self.last_intensity_delta = 0.0
+            self.last_budget_delta = 0.0
+
+        if mode != self.previous_mode:
+            self.num_mode_switches += 1
+        if regime != self.previous_regime:
+            self.num_regime_switches += 1
+
+        budget = self._make_budget(
+            mode=mode,
+            regime=regime,
+            normalized=normalized,
+            rho_down=rho_down,
+            rho_prefill=rho_prefill,
+            rho_memory=rho_memory,
+            rho_swap=rho_swap,
+            rho_scan=rho_scan,
+            rho_hard=hard_pressure,
+            prefill_token_budget=prefill_budget,
+            prefill_block_margin=block_margin,
+            decode_swap_budget_per_iter=decode_swap_budget,
+            decode_scan_limit=decode_scan_limit,
+            decode_utility_intensity=decode_utility_intensity,
+            ttft_debt_weight=ttft_debt_weight,
+        )
+        self.previous_budget = budget
+        self.previous_mode = mode
+        self.previous_regime = regime
+        self.num_updates += 1
+        self.last_pressure_overshoot = budget.pressure_overshoot
+        self.last_pressure_potential = budget.pressure_potential
+        self.last_goodput_capacity = budget.goodput_capacity
+        self.last_progress_debt = budget.progress_debt
+        self.last_decode_utility_intensity = budget.decode_utility_intensity
+        self.last_ttft_debt_weight = budget.ttft_debt_weight
+        return budget
+
+    def metrics(self) -> Dict[str, float]:
+        return {
+            "num_updates": self.num_updates,
+            "num_mode_switches": self.num_mode_switches,
+            "num_regime_switches": self.num_regime_switches,
+            "mode_switch_rate": self.num_mode_switches / max(self.num_updates, 1),
+            "regime_switch_rate": self.num_regime_switches / max(self.num_updates, 1),
+            "last_budget_delta": self.last_budget_delta,
+            "last_intensity_delta": self.last_intensity_delta,
+            "last_pressure_overshoot": self.last_pressure_overshoot,
+            "last_pressure_potential": self.last_pressure_potential,
+            "last_goodput_capacity": self.last_goodput_capacity,
+            "last_progress_debt": self.last_progress_debt,
+            "last_decode_utility_intensity": self.last_decode_utility_intensity,
+            "last_ttft_debt_weight": self.last_ttft_debt_weight,
+            "last_regime": self.previous_regime,
+        }
+
+
+def write_pressure_snapshot(component: str, pressures: Dict, budget: Optional[AdmissionBudget], extra: Optional[Dict] = None) -> None:
+    snapshot_path = os.environ.get("PHASESERVE_PRESSURE_SNAPSHOT_PATH")
+    if not snapshot_path:
+        return
+    record = {
+        "timestamp": time.time(),
+        "component": component,
+        "pid": os.getpid(),
+        "pressures": _json_safe(pressures),
+        "budget": _json_safe(budget),
+    }
+    if extra:
+        record.update(_json_safe(extra))
+    path = Path(snapshot_path)
+    tmp_path = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
+        os.replace(str(tmp_path), str(path))
+    except Exception:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def read_pressure_snapshot(expected_component: Optional[str] = None) -> Optional[Dict]:
+    snapshot_path = os.environ.get("PHASESERVE_PRESSURE_SNAPSHOT_PATH")
+    if not snapshot_path:
+        return None
+    path = Path(snapshot_path)
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {
+            "available": False,
+            "path": str(path),
+        }
+    now = time.time()
+    timestamp = float(record.get("timestamp", 0.0) or 0.0)
+    max_age_s = _env_float("PHASESERVE_PRESSURE_SNAPSHOT_MAX_AGE_S", 2.0)
+    age_s = max(now - timestamp, 0.0) if timestamp > 0 else None
+    component = record.get("component")
+    stale = age_s is None or age_s > max_age_s
+    wrong_component = expected_component is not None and component != expected_component
+    record.update({
+        "available": True,
+        "path": str(path),
+        "age_s": age_s,
+        "stale": stale,
+        "wrong_component": wrong_component,
+    })
+    return record
+
+
+def append_phase_metric(component: str, event: str, payload: Dict) -> None:
+    metrics_path = os.environ.get("PHASESERVE_METRICS_PATH")
+    if not metrics_path:
+        return
+    record = {
+        "timestamp": time.time(),
+        "component": component,
+        "event": event,
+        "pid": os.getpid(),
+    }
+    record.update(payload)
+    record = _json_safe(record)
+    try:
+        with open(metrics_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, sort_keys=True) + "\n")
+    except Exception:
+        pass

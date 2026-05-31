@@ -1,0 +1,1093 @@
+
+---PAGE 1---
+ShuffleInfer: Disaggregate LLM Inference for Mixed
+Downstream Workloads
+CUNCHEN HU, State Key Lab of Processors, Institute of Computing Technology, Chinese Academy of
+Sciences; University of Chinese Academy of Sciences, Beijing, China
+HEYANG HUANG,State Key Lab of Processors, Institute of Computing Technology, Chinese Academy
+of Sciences; University of Chinese Academy of Sciences, Beijing, China
+LIANGLIANGXU,InstituteofMathematicsandInterdisciplinarySciences,XidianUniversity,Xian,China
+XUSHENG CHEN,Huawei Cloud, Shanghai, China
+CHENXI WANG,State Key Lab of Processors, Institute of Computing Technology, Chinese Academy of
+Sciences; University of Chinese Academy of Sciences, Beijing, China
+JIANG XU,Huawei Cloud, Shanghai, China
+SHUANG CHEN,Huawei Cloud, Shanghai, China
+HAO FENG,Huawei Cloud, Shanghai, China
+SAWANG,StateKeyLabofProcessors,InstituteofComputingTechnology,ChineseAcademyofSciences;
+University of Chinese Academy of Sciences, Beijing, China
+YUNGANGBAO,State Key Lab of Processors, Institute of Computing Technology, Chinese Academy of
+Sciences; University of Chinese Academy of Sciences, Beijing, China
+NINGHUI SUN, State Key Lab of Processors, Institute of Computing Technology, Chinese Academy of
+Sciences; University of Chinese Academy of Sciences, Beijing, China
+YIZHOU SHAN,Huawei Cloud, Shanghai, China
+This work is supported in part by the Strategic Priority Research Program of Chinese Academy of Sciences under grant
+numberXDA0320000andXDA0320300,theNationalNaturalScienceFoundationofChina(GrantNo.62090022,U24B6012
+and 62172388), the China Postdoctoral Science Foundation(Grant No. 2024M762550) and Shaanxi Postdoctoral Research
+Foundation(Grant No. 2024BSHSDZZ102).
+Authors’ Contact Information: CunChen Hu, State Key Lab of Processors, Institute of Computing Technology, Chinese
+Academy of Sciences; University of Chinese Academy of Sciences, Beijing, China; e-mail: duihuhu@gmail.com; HeYang
+Huang, State Key Lab of Processors, Institute of Computing Technology, Chinese Academy of Sciences; University of
+Chinese Academy of Sciences, Beijing, China; e-mail: huangheyang22s@ict.ac.cn; LiangLiang Xu, Institute of Mathemat-
+ics and Interdisciplinary Sciences, Xidian University, Xian, Shanxi, China; e-mail: xuliangliang@xidian.edu.cn; XuSheng
+Chen,HuaweiCloud,Shanghai,China;e-mail:chenxus@connect.hku.hk;ChenxiWang,StateKeyLabofProcessors,Insti-
+tuteofComputingTechnology,ChineseAcademyofSciences;UniversityofChineseAcademyofSciences,Beijing,China;
+e-mail: wangchenxi@ict.ac.cn; Jiang Xu, Huawei Cloud, Shanghai, China; e-mail: xujiang12@huawei.com; Shuang Chen,
+Huawei Cloud, Shanghai, China; e-mail: chenshuang0804@gmail.com; Hao Feng, Huawei Cloud, Shanghai, China; e-mail:
+feng.hao1@huawei.com; Sa Wang (Corresponding author), State Key Lab of Processors, Institute of Computing Technol-
+ogy, Chinese Academy of Sciences; University of Chinese Academy of Sciences, Beijing, China; e-mail: wangsa@ict.ac.cn;
+Yungang Bao, State Key Lab of Processors, Institute of Computing Technology, Chinese Academy of Sciences; University
+of Chinese Academy of Sciences, Beijing, China; e-mail: baoyg@ict.ac.cn; Ninghui Sun, State Key Lab of Processors, Insti-
+tuteofComputingTechnology,ChineseAcademyofSciences;UniversityofChineseAcademyofSciences,Beijing,China;
+e-mail: snh@ict.ac.cn; Yizhou Shan (Corresponding author), Huawei Cloud, Shanghai, China; e-mail: ys@ucsd.edu.
+This work is licensed under a Creative Commons Attribution 4.0 International License.
+© 2025 Copyright held by the owner/author(s).
+ACM 1544-3973/2025/06-ART77
+https://doi.org/10.1145/3732941
+ACM Trans. Arch. Code Optim., Vol. 22, No. 2, Article 77. Publication date: June 2025.
+
+---PAGE 2---
+77:2 C. Hu et al.
+Transformer-basedlargelanguagemodel(LLM)inferenceservingisnowthebackboneofmanycloudservices.
+LLM inference consists of a prefill phase and a decode phase. However, existing LLM deployment practices
+often overlook the distinct characteristics of these phases, leading to significant interference. To mitigate in-
+terference, our insight is to carefully schedule and group inference requests based on their characteristics.
+We realize this idea in ShuffleInfer through three pillars. First, it partitions prompts into fixed-size chunks
+so that the accelerator always runs close to its computation-saturated limit. Second, it disaggregates prefill
+and decode instances so each can run independently. Finally, it uses a smart two-level scheduling algorithm
+augmented with predicted resource usage to avoid decode scheduling hotspots. Results show that Shuffle-
+Infer improves time-to-first-token (TTFT), job completion time (JCT), and inference efficiency in terms of
+performanceperdollarbyalargemargin,e.g.,ituses38%lessresourcesallthewhileloweringaverageTTFT
+and average JCT by 97% and 47%, respectively.
+CCSConcepts:• Computersystemsorganization →Distributedarchitectures;• Computingmethod-
+ologies→ Artificial intelligence;
+Additional Key Words and Phrases: LLM serving, disaggregated, interference, schedule
+ACM Reference Format:
+CunChen Hu, HeYang Huang, LiangLiang Xu, XuSheng Chen, Chenxi Wang, Jiang Xu, Shuang Chen, Hao
+Feng,SaWang,YungangBao,NinghuiSun,andYizhouShan.2025.ShuffleInfer:DisaggregateLLMInference
+for Mixed Downstream Workloads.ACM Trans. Arch. Code Optim.22, 2, Article 77 (June 2025), 24 pages.
+https://doi.org/10.1145/3732941
+1 Introduction
+Since the boom of ChatGPT,large language model(LLM) based services have now played a
+vital role in our daily lives[5,12,27,40,44,51]. Behind the scenes, all use cases boil down to LLM
+inference serving. To run an inference request, the LLM model will first take the user inputs to
+generate the first token (known as the prefill phase), and then generate outputs token-by-token
+in an auto-regressive manner (known as the decode phase). Numerous works were proposed to
+improve LLM inference’s cost efficiency [28,54].
+There are various ways to interact with LLM, from simple chats to more complex downstream
+taskssuchasdocumentsummarization,contentcreation,andsoon.Asaresult,LLM-empowered
+services serve inference requests with dramatically different properties that can be categorized
+across two dimensions: the input prompt length during the prefill phase and the generated to-
+ken length during the decode phase. As shown in Figure1, summarization tasks have long input
+prompts and short generated tokens, while context creation tasks are the opposite.Token lengths
+of different downstream tasks can differ by more than two orders of magnitude. Given the sig-
+nificant variation in LLM inference requests from various downstream tasks, the first research
+question we ask in this article ishow do these inference requests perform when running together?.
+To answer this question, we run extensive tests that mix LLM prefill and decode requests of
+different lengths. Unfortunately, we have observed serious interference across all combinations.
+Forexample,mixingprefillrequestscouldresultina10 ×slowdown,combiningprefillanddecode
+requests could lead to a 5× slowdown, and mixing decode requests with different lengths could
+take a 16% throughput hit (see Section2.2). A naive solution to avoid interference is to provision
+resources for each downstream task statically. Given the high cost of LLM serving infrastructure,
+this solution is impractical. To this end, the second research question we ask in this article ishow
+to build a distributed LLM inference serving system that minimizes interferences?
+Wetakeastepbacktoexaminewhyinterferenceexists.Wefindthefundamentalissueliesinthe
+fact that current LLM deployment practices do not account for the distinct characteristics exhib-
+itedbyLLMprefillanddecodephases.Specifically,thepre-fillphaseresemblesacomputationally
+ACM Trans. Arch. Code Optim., Vol. 22, No. 2, Article 77. Publication date: June 2025.
+
+---PAGE 3---
+ShuffleInfer: Disaggregate LLM Inference for Mixed Downstream Workloads 77:3
+Fig. 1. Length Distribution. Prompt Tokens for
+Prefill and Generated Tokens during Decode. Data
+sources: conversation [46], summarization [23], writ-
+ing [24].
+Fig.2. PrefillandDecode’sCharacteristics. De-
+code’s GPU utilization fluctuates because the task
+is faster than our monitoring granularity.
+heavy batch job, with its computation scaling quadratically with the input prompt length. The
+decode phase resembles a memory-intensive, latency-critical task, with its resource usage scaling
+sublinearly with the generated token length [42]. Interferences observed in our tests are classic
+system problems: (a) running prefill requests leads to a serious slowdown because we continue
+addingcomputation-heavyjobstoanalreadysaturatedhardware;(b)combiningprefillanddecode
+requests hurts both because we co-run batch and latency-critical jobs simultaneously; (c) mixing
+decode requests leads to a throughput drop because we are unaware of the memory bandwidth
+and capacity usage, thus leading to contention and head-of-line blocking.
+Tosolvetheseissues,ourinsightistocarefully scheduleandgrouprequestsbasedontheircharac-
+teristics. We realize this idea in ShuffleInferOur designs are three-fold. First, to avoid interference
+runningprefill,weproposelimitingthenumberoftokensprocessedinasingleprefilliterationso
+that hardware is fully utilized without incurring extra penalties. ShuffleInfer partitions and pads
+input prompts into fixed-size chunks so that the accelerator always runs close to its computation-
+saturated limit. Second, to avoid interference in co-running prefill and decode, we propose disag-
+gregating prefill from decode phases. ShuffleInfer has dedicated prefill and decode instances. Dur-
+ingruntime,prefillinstancestransferprefilledKVcachetodecodeinstances.Theprefillanddecode
+instances are virtual concepts in that each can scale independently and flip roles if load changes.
+Third,toavoidinterferencerunningdecoderequests,weproposeusingasmarttwo-levelschedul-
+ingalgorithmaugmentedwithpredictedresourceusagetoavoidschedulinghotspots.ShuffleInfer
+incorporates an LLM-based length prediction model to speculate the number of generated tokens
+of decode requests, and then schedule them accordingly.
+We are among the first to propose disaggregate-prefill-decode in LLM inference, concurrent
+to Splitwise [41], DistServe [62], and Dejavu [49]. Table1 compares these four works across ten
+dimensions.Overall,disaggregatingprefillanddecodeopensthedoortoalargedesignspace,and
+each work shines with its unique contribution. Our work is unique in adopting a smart prefill to
+decodeschedulingpolicyusingalength-predictionmodel,thusavoidinghotspotsamongdecoding
+instances.
+ShuffleInfer is implemented based on vLLM [28]. Most of our modules are implemented in
+Python, except for the network stack module, which utilizes C++ to interface with low-level APIs
+for KV cache transfer. The fine-tuning part uses Trainer APIs in HuggingFace Transformer [22].
+Sincewecannotaccesshigh-endhardware,weimplementamockmechanismtoemulatevarying
+network bandwidth connecting prefill and decode instances, as illustrated in Figure9.
+WecompareShuffleInferwithvanillavLLMusingpublicdataset[ 46]in termsoftime-to-first-
+token (TTFT), job completion time(JCT), and efficiency as in performance per dollar (perf/$).
+Werunthematoparealtestbedwithemulatednetworkbandwidthrangingfrom200Gbpsto300
+GBps.Forlightprefillandheavydecodeworkload,ShuffleInferimprovesperf/$by2.4 ×(Figure12).
+ACM Trans. Arch. Code Optim., Vol. 22, No. 2, Article 77. Publication date: June 2025.
+
+---PAGE 4---
+77:4 C. Hu et al.
+For a common mixed workload, ShuffleInfer improves average TTFT and average JCT by 85%
+and 50%, respectively (Figure17). Nevertheless, we also find that ShuffleInfer’s design is not ideal
+for heavy prefill and heavy decode workloads since the room for improvement is marginal, and
+the overhead we introduce cannot be offset (Figure14). Overall, our ideas mentioned above are
+effective. ShuffleInfer achieves effective LLM inference serving, outperforming vLLM by a large
+margin in TTFT, JCT, and perf/$ running most common workloads (Section5.1).
+We make the following key contributions.
+—We propose to disaggregate prefill and decode to mitigate interference in LLM inference,
+concurrent to several recent works. We also systematically lay out the new design space
+enabled by disaggregation.
+—We propose to use a prediction model to guide distributed scheduling among prefill and
+decode instances to avoid hotspots and improve overall throughput.
+—We implement ShuffleInfer with three key design pillars, outperforming SOTA system by a
+large margin.
+2 Background and Motivation
+We present a brief primer on LLM inference and study interferences while running various LLM
+inference requests to motivate our work. We deployed an OPT-13B model on two V100 GPUs for
+feature and interference experiments. Each data point in the experiments represents the average
+of five times, with the upper and lower bounds indicating the maximum and minimum values.
+2.1 Generative LLM Inference
+LLM inference is a process that involves generating a sequence of output tokens in response to
+an input prompt. This process consists of two sequential phases: prefill and decode. The prefill
+phase outputs the first token and generates thekey and value cache(KV cache) for future de-
+coding [28], which is directly related to the TTFT. The decode phase uses the previous KV cache
+to generate new tokens step-by-step in an auto-regressive manner, determining the JCT. Conse-
+quently, these two phases are directly aligned with user-level application requirements, and opti-
+mizing each phase individually can reduce latency at the application layer. Generally, the prefill
+phase is computation-bound, and the decode phase is memory-bound [42]
+WereportthisinFigure 2.Resultsindicatethattheprefillphase’sthroughputstaysflatoncethe
+accelerator is saturated at a certain number of tokens (which we name the accelerator-saturate
+threshold). The decode phase’s throughput continues increasing with a larger batch size, but
+plateaus once the memory bandwidth is saturated.
+2.2 Motivation: Interference Study
+This section studies the impact of running different inference requests concurrently. Inspired by
+Figure 1, we classify inference requests across two dimensions (prefill and decode length) and
+one property (light or heavy), resulting in four distinct request types: heavy prefill, light prefill,
+heavy decode, and light decode. Here, heavy refers to a long token length, while light refers to
+a short token length. Below, we study mixing prefill and prefill (Section2.2.1), prefill and decode
+(Section 2.2.2), decode and decode (Section2.2.3).
+2.2.1 Prefill and Prefill. We first study mixing prefill requests. Here, light prefill has roughly
+18 prompt tokens as it is the median token length in ShareGPT’s short prompts [46], while heavy
+prefill has 512 prompt tokens as the accelerator is saturated at this length in our testbed (see
+Figure 2). In Figure3(a) and (b), we show how a light prefill’s latency changes if it co-runs with
+other light prefill and heavy prefill requests. We find its latency increases by 2× and 8× if there
+ACM Trans. Arch. Code Optim., Vol. 22, No. 2, Article 77. Publication date: June 2025.
+
+---PAGE 5---
+ShuffleInfer: Disaggregate LLM Inference for Mixed Downstream Workloads 77:5
+Fig. 3. Interference of Prefill and Prefill. LP
+means light prefill. HP means heavy prefill. (a) and
+(b) indicate that light prefill’s prefill latency in-
+creases as the number of co-running requests in-
+creases. The same applies to (c)’s heavy prefill.
+Fig.4. InterferenceofDecodeandDecode. LD
+means light decode. HD means heavy decode. (a)
+and (b) show that the mixing execution of De-
+code requests with different lengths causes mu-
+tual throughput interference.
+Fig. 5. Interference of Prefill and Decode.The mutual interference impact of mixing Prefill and Decode
+phases during execution. LD means light decode. HD means heavy decode.
+are 7 and 63 concurrent light prefill requests in the same batch. Additionally, it incurs more than
+10× latency slowdown if it runs with other heavy prefill requests. In Figure3(c), we show that
+heavyprefill’slatencyalsoincursa3 ×slowdownifco-runwithotherlightprefillrequests.Overall,
+we find that when the total number of tokens in a batch is larger than the accelerator-saturate
+threshold, the prefill latency dramatically increases.
+2.2.2 Prefill and Decode. We now study mixing prefill and decode in the same batch due to
+continuous batching [28, 58]. Both light prefill and heavy prefill follow Section2.2.1’s definition.
+Also, light decode refers to the ones that generate a small number of tokens, e.g., less than 100.
+heavydecodereferstotheonesthatgeneratealargenumberoftokens,e.g.,largerthan512tokens.
+Thoughdecodinglatencyincreasesslowlywithanincreasingnumberofgeneratedtokens,weonly
+present tests related to light decode as heavy decode presents similar results.
+In Figure5(a) and (b), we show how a light decode’s per-iteration decoding latency changes if
+it co-runs with light prefill and heavy prefill requests. Results indicate that its decoding latency
+increases by 5× even if only one other heavy prefill request is in the same continuous batch! In
+Figure 5(c) and (d), we show how a light prefill’s and a heavy prefill’s latency changes if they co-
+run with other light decode requests. Figure5(c) indicates that the prefill latency increases once
+the number of co-running light decode requests is more than 7. Both slow down roughly by up to
+2.5×.
+2.2.3 Decode and Decode. We now study mixing decode requests. Following Section2.2.2’s
+definition and ShareGPT’s distribution, we set both requests to use short prompts: light decode
+generatesroughly20to100tokens,whileheavydecodegeneratesmore than512tokens.Figure 4
+presents the decoding throughput and latency while running light decode and heavy decode re-
+quests in the same batch. Results suggest that compared to a batch with all light decode requests,
+ACM Trans. Arch. Code Optim., Vol. 22, No. 2, Article 77. Publication date: June 2025.
+
+---PAGE 6---
+77:6 C. Hu et al.
+increasingheavydecode requestscould seriouslyhurtthroughputandlatency. For example, with
+a batch size of 128, compared to a batch with all light decode, a batch with half heavy decode and
+half light decode’s throughput drops by 16% while the latency increases by 23%.
+2.3 Analysis and Insights
+We have observed significant interferences in LLM inferencing. The root cause is simple: current
+LLMsystemsareignorantofthedistinctcharacteristicsexhibitedbyLLMprefillanddecodephases.
+The prefill phase resembles a computation-heavy batch job, while the decode phase resembles a
+memory-intensive, latency-critical task [42].
+Interferences measured above are classic system problems. In Section2.2.1, running prefill re-
+quests leads to a serious slowdown because we continue adding computation-heavy jobs to an al-
+ready saturated hardware. In Section2.2.2, mixing prefill and decode requests hurts both because
+weco-runbatchandlatency-criticaljobsatthesametime.InSection 2.2.3,mixingdecoderequests
+leadstoathroughputdropbecauseweareunawareofthememorybandwidthandcapacityusage,
+thus leading to contention and head-of-line blocking.
+Our work aims at solving these issues by carefullyschedule and group requests based on their
+characteristics. Our ideas are three-fold. First, to avoid interference running prefill, we propose
+limiting the number of tokens processed in a single prefill step so that hardware is fully utilized
+without incurring extra penalties. Second, to avoid interference co-running prefill and decode,
+we propose disaggregating prefill from decode so that each runs independently. Third, to avoid
+interference running decode requests, we propose to use a smart two-level scheduling algorithm
+augmented with predicted resource usage to avoid scheduling hotspots.
+3 Design
+We propose ShuffleInfer, an LLM inference serving system designed to battle interferences. It has
+three pillars. First, we run prefill in a fixed-size computation unit by partition and pad input
+prompts into fixed-size chunks such that the accelerator always runs close to its computation-
+saturated limit (Section3.3), akin to prior works [2]. Second, we design instances dedicated to
+running the prefill or decode phases. We schedule prefill requests to prefill instances only, and
+the same goes for decode requests. Prefill instances will transfer prefilled KV cache to decode in-
+stances.Ourprefillanddecodeinstancesarevirtualconceptsinthateachcanscaleindependently
+andfliprolesifloadchanges(Section 3.5).Finally,wedesign atwo-levelschedulingalgorithmfor
+bothprefillanddecoderequestscheduling.Weincorporatealength-predictionmodeltospeculate
+decoderequests’resourceusageandthenschedulethemaccordinglywhensendingrequestsfrom
+prefill to decode instances (Section3.4).
+3.1 Overview
+WeshowShuffleInfer’sarchitectureinFigure 6(b)withfourmoduleshighlighted:centralizedcon-
+trol plane, prefill instance, decode instance, and length prediction model.
+Centralized control plane.It consists of a global scheduler and a cluster monitor. The global
+scheduler sends requests to prefill instances based on load and receives streaming outputs from
+decodeinstances.Theclustermonitorcollectsstatisticsfromprefillanddecodeinstancesandreg-
+ularlybroadcastsloadinformationtoprefillinstances.Itadds,removes,andflipsprefillordecodes
+instances.
+Prefill Instances.They only run the prefill phase of an LLM inference request. Each prefill
+instance has a local scheduler, a length predictor, the main LLM engine, and a dispatcher. All
+requests undergo four steps. First, the local prefill scheduler sorts requests based on pre-defined
+policies. Second, the length predictor runs a prediction model to speculate the requests’ decode
+ACM Trans. Arch. Code Optim., Vol. 22, No. 2, Article 77. Publication date: June 2025.
+
+---PAGE 7---
+ShuffleInfer: Disaggregate LLM Inference for Mixed Downstream Workloads 77:7
+Fig. 6. ShuffleInfer’s Architecture.(a) compares existing systems and ShuffleInfer’s execution timeline.
+Theexistingsystemsparthastwonodesrunningmixedprefillanddecode.ShuffleInferhasseparatedprefill
+anddecodeinstances.Thisallowsfortheload-balancing oflongdecodingtasksacrossdifferenton-demand
+decode instances. Each timeline comprises four rounds (R1 to R4), with the length of prefill and decode
+boxes representing their sequence length and the width of the decode box indicating its resource usage. A
+widerdecodeboxindicatesthepresenceoflengthygeneratedtokens,resultinginlargerresourceusageand
+decoding latency. (b) shows ShuffleInfer’s architecture with four core modules highlighted.
+lengths, which are then used to estimate resource usage during the decoding phase. Third, the
+mainLLMenginepartitionsallrequestsintofixedchunks.Finally,foreachrequest,thedispatcher
+runs an inter-decode load-balancing algorithm to select a decode instance and then forwards the
+generated KV cache to it.
+Decodeinstances. Theyarevirtuallydisaggregatedfromprefillinstancesandonlyrunthede-
+codephaseofanLLMinferencerequest.Eachdecodeinstancecanreceiverequestsfromanyprefill
+instance. It runs a local scheduler with three pre-defined policies for selecting decode requests to
+run in the main LLM engine.
+Length Prediction Model.The prediction model is a small LLM model fine-tuned offline for
+predicting the generation length of LLM inference requests. ShuffleInfer’s prefill dispatcher and
+decode instance’s local scheduler utilize the speculated information to schedule decode instances
+and avoid hotspots measured in Section2.2.3. The prediction model is small and deployed at all
+prefill instances.
+3.2 Control Plane
+ShuffleInfer has a centralized control plane to manage inference clusters at the cloud scale. It con-
+sists of a cluster monitor that managesthe lifecycle of prefill and decode instancesand a global
+scheduler that managesthe lifecycle of inference requests. The centralized control plane is a dis-
+tributed system without a single point of failure or processing bottlenecks.
+Theclustermonitorisresponsibleforcollectingandbroadcastingstatisticsandscalinginstances.
+Bothprefillanddecodeinstancesregularlysendtheirloadinformationtotheclustermonitor(e.g.,
+every100ms).Sincewerundecentralizeddecoderequestschedulingatprefillinstances,thecluster
+monitor will aggregate decode instances’ load information and broadcast it to all prefill instances.
+The global scheduler is responsible for forwarding inference requests from external services to
+prefillinstancesandsendinginferenceoutputsfromdecodeinstancesbacktoexternalservicesin
+a streaming fashion. The global scheduler maintains a request status table, which stores requests’
+ACM Trans. Arch. Code Optim., Vol. 22, No. 2, Article 77. Publication date: June 2025.
+
+---PAGE 8---
+77:8 C. Hu et al.
+arrival time, current phase (e.g., prefill or decode), SLA requirement, and so on. When a request
+arrives, the global scheduler will choose a prefill instance with the least load and then insert the
+requestintothetable.Followingourinsighttodisaggregateprefillanddecodeinstances,theglobal
+scheduleronlydecideswhichprefillinstancewillhandletherequest.Itisuptotheprefillinstance’s
+dispatcher to decide which decode instances to use with a speculated resource usage.
+3.3 Prefill Instance
+The prefill instance runs the prefill phase of an inference request. To avoid interference among
+prefillrequests,weuseaprefillschedulerandchunkedprefilltosortandpartitionallpromptsinto
+fixed-size chunks. To help avoid interference during the decode phase, we run a length predictor
+and a decentralized dispatcher to choose decode instances based on speculated resource usage.
+3.3.1 Prefill Scheduler. The prefill instance’s scheduler is crucial for improving the prefill
+phase’slatencyandthroughput.Theschedulermaintainsarawrequestqueuethatstoresrequests
+fromtheglobalschedulerandascheduledqueuethatstoressortedrequests.Inthiswork,wehave
+designedandimplementedthreeschedulerpolicies: first-come-first-serve(FCFS),shortest-job-
+first(SJF), andlongest-job-first(LJF). We can use the latter two policies because we can accu-
+rately estimate a request’s prefill time based on the number of tokens in its prompt.
+Thescheduledrequestsaresenttothelengthpredictor,whichexecutesscheduledrequestsas-is
+usingfixed-sizebatch(Section 3.3.2),andthemainLLM,whichuseschunkedprefill(Section 3.3.3).
+In Figure7, we illustrate the above three scheduler policies and how scheduled requests are par-
+titioned and merged into fixed-size chunks. Specifically, FCFS maintains the request arrival order,
+sequentially partitioning and merging into chunks. It works well for similar length prompts but
+cancausehead-of-lineblockingandhighJCTwithlongprompts.WeintroduceSJFtoaddressthese
+issues. This policy schedules requests based on prompt token length in ascending order, reducing
+JCT compared to FCFS. However, it can cause starvation for long requests. To avoid starvation,
+we propose using a prefill scheduling batch (i.e.,PrefillSchedBatch) variable to control how
+many inference requests can be scheduled at a time. For example, assume the raw request queue
+has twenty requests awaiting scheduling. If we set the batch size to ten, we will schedule twice,
+each with ten requests sorted and put into the scheduled queue. This simple mechanism prevents
+starvation during the prefill phase.
+Our scheduler is effective. Results in Figure18 show that SJF lowers average prefill waiting
+time by 7.8% compared to FCFS when the batch size is set to 16. The improvement is even more
+pronounced with larger batch sizes.
+3.3.2 Length Predictor. To address the interference cases measured in Section2.2.3, it is essen-
+tialtodeterminethenumberoftokensthatadecoderequestislikelytogenerate.Thisinformation
+will enable us to schedule decode requests in a length-aware manner. As such, the prefill instance
+runsalengthpredictortopredictthelengthrangeofaninferencerequest’sgeneratedtokens.The
+prefillinstance’sdispatcherutilizesthisinformationfor inter-decodeinstance scheduling,whilethe
+decodinginstance’slocalscheduleremploysthisinformationfor intra-decodeinstance scheduling.
+Our length predictor uses a small LLM-based classification model called a “predict model” to
+classify the length of generated tokens into fixed-size buckets if the request were executed by a
+specifictargetLLMmodel.Thepredictmodelisintentionallysmall,containingmillionsofparam-
+eters while the target model is much larger, with billions of parameters. As we run the length
+predictor at the prefill instance, we aim at minimizing its cost and avoid impacting the main LLM
+model. Therefore, approaches like using a giant LLM to predict length are not feasible for us [61].
+Fortunately,asmallLLMmodelismuchfasterthanagiantLLMandusesmuchlessresources.For
+ACM Trans. Arch. Code Optim., Vol. 22, No. 2, Article 77. Publication date: June 2025.
+
+---PAGE 9---
+ShuffleInfer: Disaggregate LLM Inference for Mixed Downstream Workloads 77:9
+Fig. 7. Prefill Scheduler Policies.The left shows four raw inference requests (R1 to R4). The right shows
+scheduledrequestsusingFCFS,SJF,andLJF.Weshowthechunkedversiontoillustrateslicingandmerging
+(C1 to C4).
+example, we use OPT-125M as the predict model and OPT-13B as the target model, the small one
+is roughly ten times faster than the larger one.
+Weopttopredictthelengthrangeinsteadofanexactnumberoftokensbecausethelatterisex-
+tremelydifficulttopredict.Variousinferenceparameters,suchastemperatureandtop-p[ 4],result
+insignificantresponsevariationsfromthesameLLMmodeltothesamequestioninpractice.Since
+ourprimarygoalistousetheestimatedlengthtoguideourrequestschedulingdecisions,anexact
+length estimation is unnecessary; a length range suffices. For instance, if we estimate the length
+to be between ten to twenty tokens, we can deduce its resource usage’s lower and upper bounds.
+In this work, we have tested two execution modes: a sequential mode, where we first execute
+the predict model followed by the target model, and a parallel mode, where both models are run
+simultaneously. The sequential mode adds extra latency for the target LLM model, while the par-
+allelmodemayreducethetargetLLMmodel’sthroughput.BasedonourfindingsinFigure 20,we
+optedtousetheparallelmodebecausethemainLLMisnotaffectedformostrequests(morethan
+80%), though throughput take a 10% hit under extreme stress test.
+Figure8outlinestheofflinefine-tuningandonlinepredictionworkflow.Inthisprocess,thepre-
+dictmodel(depictedinred)istrainedtospeculatethedecodingbehaviorofaspecifictargetmodel
+(depictedinblue).Thefine-tuningofthepredictmodelinvolvesthreekeysteps.Firstly,weassem-
+ble a prompt-only training dataset inherited from public datasets, a large target LLM model (e.g.,
+OPT-13B),andaclassificationmodelforourpredictmodel(e.g.,125MOPTForSequenceClassifica-
+tion[22]).Secondly,wesendtrainingpromptstothetargetLLMmodel,whichgeneratesresponses.
+Subsequently, we categorize the generated responses into fixed-size buckets with a chosen gran-
+ularity. For instance, using a granularity of 100, responses with token lengths between 0 to 200
+are labeled with 0, 200-400 are labeled with 1, and so on. These labels are paired with the training
+promptstocreateanewdataset.Lastly,wepartitionthenewdatasetintoatrainingandevaluation
+sections and then proceed to train and evaluate the predict model using this dataset.
+Thelengthrangegranularityplaysacrucialrole.Ifsettoone,wefallbacktopredictinganexact
+number of tokens, which is not practical. If set to target model’s context window size (e.g., 2 K),
+we fall back to no prediction at all and could run into interferences reported in Section2.2.1. Intu-
+itively,asmallergranularitymeansmoreaccurateresourceandperformanceestimationbutlower
+accuracy in practice. A larger granularity means higher accuracy but essentially makes schedul-
+ingharder.Regardlessofgranularity,it’seasytocalculateresourceusage’supperandlowerbound
+butnotperformance.Inthiswork,wecanpredictagranularityof200tokenswith74.9%accuracy.
+Since improving prediction accuracy is not the focus of this work, we leave it for future work.
+Discussions. We run the length predictor at each prefill instance, hence prefill instances can
+make well-informed decisions on which decode instances should have enough resources to run
+certaindecodingrequests.Nevertheless,weidentifytwoalternativedesigns.Thefirstdesignisto
+ACM Trans. Arch. Code Optim., Vol. 22, No. 2, Article 77. Publication date: June 2025.
+
+---PAGE 10---
+77:10 C. Hu et al.
+Fig. 8. Predict Model’s Fine-tuning and Prediction Flow.The target model is the one that we want
+to predict its decoding behavior. The predict model is the one we train. This work does not explore online
+fine-tuning.
+runthelengthpredictorateachdecodeinstance.Asaresult,theprefillinstancecanonlyschedule
+requests based on the load of decoding instances. However, this design cannot avoid interference
+caseswemeasuredinSection 2.2.3.Indeed,onecouldmigrateinterferencerequestsamongdecod-
+inginstancesatruntimebasedonpredictedlength.Thiswouldbeanoverlycomplexsolution.The
+seconddesignistorunthelengthpredictorattheglobalschedulerbeforedispatchingrequeststo
+refill instances. This design could make the global scheduler a bottleneck. We believe our current
+design is easier and simpler to reason about and deploy compared to alternatives.
+3.3.3 Chunked Prefill. After the prefill scheduler, we concurrently execute the prefill phase of
+the main LLM alongside the length predictor. We employ fixed-size chunks for the LLM prefill
+rather than using fixed batch sizes [28].
+As demonstrated in Section2.2.1, we observe that as the number of tokens in a prefill itera-
+tion increases, the accelerator’s throughput remains constant, while the latency continues to rise
+afterreachingacertainthreshold.Werefertothisthresholdas ChunkSize.Comparedtothetradi-
+tionalfixedbatchsizeapproach,runningprefillin ChunkSizeallowsfortheoptimalutilizationof
+acceleratorswithoutincurringadditionallatencypenalties.TheacceleratorandtheLLMmodelar-
+chitecturedeterminethe ChunkSize.Modelswithlargerhiddendimensionsandacceleratorswith
+lower capabilities typically result in a smallerChunkSize. For example, in our test environment,
+the value is 512 tokens for OPT 13B.
+Figure 7 illustrates how chunked prefill works for different scheduler policies. For scheduled
+requests,wefirstsliceandthenmergeprompttokensintofixed-sizechunkswithoutalteringtheir
+order.Thefinalchunkinabatchcouldbepartial,andwewillpaditto ChunkSizewithzeros.Then,
+weinvokethemainLLMmodeltoexecuteprefillforwardonechunkatatime.Torecordprogress,
+we maintain a simple variable per request that records the last prefilled token position. Chunk
+mode involves prefilling calculations with a preceding cache, where a portion of a single request
+has already been computed. Therefore, it is necessary to record the pre-generated tokens of the
+requestto obtain the already computedKV cachefor matrix concatenation.The computeddata is
+managed with attention masks to avoid duplicate computations within the attention mechanism.
+The benefits of using chunked prefill [2] and various prefill scheduler policies are substantial.
+In Figure18, we compare vanilla vLLM, which uses fixed batch size for prefill, against Shuffle-
+Infer which uses chunked prefill along with FCFS, SJF, and LJF. Chunked prefill [2] with FCFS
+lowers average prefill latency by 86.4%. Additionally, we avoid the interference cases measured
+ACM Trans. Arch. Code Optim., Vol. 22, No. 2, Article 77. Publication date: June 2025.
+
+---PAGE 11---
+ShuffleInfer: Disaggregate LLM Inference for Mixed Downstream Workloads 77:11
+in Section2.2.1 as heavy prefill requests are broken into fixed-chunks and the accelerator is best
+utilized.
+Discussion.(1)AnearlyworkSarathi[ 2]hasalsoproposedchunkedprefill,wheretheyutilize
+prefill-decode-mixed chunks. In contrast, our approach involves running prefill-only chunks as
+wedisaggregateLLM’sprefillanddecodeintoseparateinstances.(2)Ourlengthpredictorutilizes
+a small LLM model for prediction and continues using fixed-size batching instead of chunked
+prefill [2]. This is due to the model’s small size, which does not exhibit a clear compute-saturate
+t h r e s h o l da ss e e ni nl a r g e rm o d e l s .
+3.3.4 Dispatcher. The prefill instance’s last module is the dispatcher, which carries out two
+steps for each prefilled request. First, it runs an inter-decode instance scheduling algorithm to
+selectadecodeinstanceandthentransmitstheprefilledKVcachetothechoseninstance.Thedis-
+patcherisevent-driven,runningwheneverthereareprefilledrequests(orchunks).Thedispatcher
+is vital in mitigating decode and decode interferences as measured in Section2.2.3.
+Oncearequest’sinitialchunkisprefilled,thedispatcherinvokesadecentralizedload-balancing
+algorithm to select a decode instance with sufficient resources to run this request’s decode phase.
+Our algorithm consists of three steps. First, we categorize decode instances into two sets:α,
+those with enough resources to execute the chosen request, andβ, those without. Recall that the
+prefill instance has all decode instances’ load information broadcasted from the cluster monitor
+(Section 3.2). With the predicted length range (Section3.3.2), finding decode instances with
+adequate resources for executing this request’s decode phase is easy. Second, we use the power-
+of-two [34] algorithm to choose two instances from theαset randomly. Lastly, from the two
+instances,wechoosetheonethatwouldencountertheleastinterferenceiftheprefilledrequestis
+senttoit.BasedonFigure 4,ourgoalistoestablishthelowestaverageratioofheavydecode:light
+decode, which means we need to spread heavy decode requests evenly. Figure22 proves our
+algorithm is effective, achieving the lowest total decoding time compared to other policies.
+Onceadecisionismade,thedispatchersendsthisrequest’smetadataandprefilledKVcacheto
+the selected decode instance. Crucially, there are two key design considerations for transferring
+KV Cache: (1) transfer granularity and (2) network stack for transferring the cache.
+We begin by discussing granularity. Due to our use of chunked prefill, the prefilled KV cache is
+createdinchunks(Section 3.3.3).Asaresult,wehavetheoptiontotransfertheKVcacheeitherat
+a chunk-level, sending each chunk’s KV cache as it is generated, or at arequest-level, sending the
+aggregatedKVcacheforarequestuntilallofitschunksareprefilled.Utilizingchunk-leveltransfer
+enablesustoparallelizechunkedprefillandKVcachetransfer,whilerequest-leveltransferallows
+us to minimize the number of network transfers by sending larger data. A concurrent work [41]
+hasproposedlayer-wiseKVcachetransfer,whichalignswithourchunk-levelapproach.Combin-
+ing their layer-wise approach with our chunk-level transfer could further optimize compute and
+networkparallelization.Inthiswork,weonlyimplement request-leveltransferforsimplicityand
+leave the chunk-level transfer to future work.
+We will now explore the effect of the KV cache in models with varying parameters. The cache
+sizeandavailablebandwidtharetwocriticalfactorsaffectingKVcachetransmission.TheKVcache
+size, closely related to the model parameters and the input length, is calculated as 4×S ×H ×L if
+usingFP16,whilethetransmissiontimeforasinglerequestis 4SHL
+B ,wher eS representstheinput
+sequence length,H denotes the hidden size,L is the number of model layers andB is the network
+bandwidth.Asanexampleofarequestwithalengthof2,048tokens,KVcachetransmissiontakes
+just3.4msforOPT-13Band20msforOPT-175BwithanNvLinknetworkbandwidthof900GB/s,
+contributing minimally to overall latency. Furthermore, a layer-by-layer KV cache transmission
+method can further reduce the request’s Time to Second Token to4SH
+B .
+ACM Trans. Arch. Code Optim., Vol. 22, No. 2, Article 77. Publication date: June 2025.
+
+---PAGE 12---
+77:12 C. Hu et al.
+Fig. 9.Data Links and Network Stacks.The Direct link provides bandwidth in the hundreds of GBs (e.g.,
+NVLink900GBps).The Direct-NICand Indirect linkofferbandwidthinthehundredsofGbs(e.g.,ConnectX-6
+200Gbps).The1-sidedstackmeansthesenderacceleratorcantransmitdatatothereceiverwithoutinvolving
+the receiver’s CPU.
+We now delve into the network stack. Once the main LLM completes its prefill phase, the pre-
+filledKVcacheisgeneratedattheaccelerator’smemory(e.g.,GPU’sHBM).Ourgoalistotransmit
+this cache to the selected decode instance’ accelerator memory, regardless of the hardware plat-
+forms on which our system is deployed. This is challenging as multiple physical data links exist
+between the prefill and decode instances, each requiring different software stacks. We classify ex-
+isting physical data links into three types, as shown in Figure9. The first is calledDirect,w h e r e
+acceleratorshaveadirectlyconnectedhigh-speedlinksuchasNvLink[ 53]orHCCS[ 18].Wecan
+use low-level memory copy primitives [19, 37] or collective libraries [36] to transmit data over
+these links. The second is calledDirect-NIC, in which accelerators communicate via their com-
+panion NICs. We can use custom-built libraries [35] to transmit data over PCIeand Ethernet (or
+Infiniband). The third is calledIndirect, where there is no direct link, and the accelerators must
+bouncedataviatheircompanionCPUDRAM,incurringextramemorycopies.InFigure 9,wealso
+categorize network stacks that utilize aforementioned data links intoone-sided and two-sided,
+similar to RDMA’s classification. Accelerators like GPU or NPU can do one-sided memory access
+as they have low-level primitives such as direct memory copies between devices [19,37].
+TonavigatethecomplicatedphysicaldatalinksandensurethatShuffleInfercanalwaysusethe
+most performant link once deployed, we design a unified network transfer abstraction to utilize
+thedifferentnetworkstackoptionslistedinFigure 9.ThestackexposesAPIssuchassend,receive,
+read, write, and so on. Our dispatcher calls these APIs to transmit the KV cache to remote decode
+instances.
+Discussion.Wenowdiscussthreeresearchquestions.Thefirstquestionpertainstowhetherit
+isbeneficialtosimultaneouslyutilizemultipledatalinksfortransmittingtheKVcache.Whilethis
+approach could enhance performance, it may also introduce complex control logic. The second
+question involves the sender accelerator accessing the memory of the receiver accelerator with-
+out involving the receiver’s CPU. This scenario raises typical challenges associated with building
+large-scaleRDMA-basedmemorysystems[ 13,17].Wecannotexploreeitheroftheseideasinthis
+work due to limited access to high-end hardware. The third question is addressed differently in
+ACM Trans. Arch. Code Optim., Vol. 22, No. 2, Article 77. Publication date: June 2025.
+
+---PAGE 13---
+ShuffleInfer: Disaggregate LLM Inference for Mixed Downstream Workloads 77:13
+modelinferenceschedulingcomparedtoco-flowscheduling.Intheco-flowschedulingapproaches
+discussedinPhilae[ 26]andV arys[7],localoptimizationsaloneareinsufficienttoachieveaglobal
+optimum.Eachco-flowconsistsofmultipleconcurrentstreams,sostream-levelmetricsdonotac-
+curatelycaptureapplication-leveltiming.Incontrast,theP/Dphasesinvolveasingle,serialphase,
+wheretheend-to-endlatencyofeachrequestdirectlyreflectsuser-levelapplicationdemand.Con-
+sequently, optimizing these phases independently facilitates a more effective reduction in overall
+application-level latency.
+3.4 Decode Instance
+The decode instance runs the decoding phase of an inference request. As shown in Figure6,i t
+includesareceivermodule,whichispartoftheunifiednetworktransfermodule,alocalscheduler,
+and an LLM for decoding. The processing steps are straightforward. The receiver module accepts
+requeststransmittedfromremoteprefillinstancesandwaitsforprefilledKVcachestobereceived
+before adding them to the local scheduler’s queue. The scheduler uses continuous batching to
+groupdynamic-sizedbatchesandinvokestheLLMfordecodinginanauto-regressivefashion.We
+implement ShuffleInfer based on vLLM [28] (see Section4). Hence, it manages the KV cache in
+pages rather than reserved for the maximum context length [38, 58].
+With the predicted length information sent from the prefill instance, we propose twoworking-
+set-aware scheduling policies in addition to vLLM’s vanilla one. vLLM’s existing policy schedule
+requests in agreedy fashion. As long as the accelerator has spare memory, it will add requests to
+thecurrentiteration.However,itmayrunoutofmemoryinfutureiterationsandcausethrashing.
+Fundamentally, it is oblivious to the working set size.
+Toaddressthislimitation,wepropose reserve-staticandreserve-dynamicpolicies,bothaim
+at preventing triggering swaps. Under the reserve-static policy, a request is scheduled only if its
+predicted memory usage is smaller than the available accelerator memory for the current itera-
+tion. In contrast, the reserve-dynamic policy takes a more proactive approach by considering the
+predictednumberofremainingtokens.Specifically,anewrequestisaddedtothescheduledbatch
+only if there is still spare memory when the shortest remaining job in the batch finishes. This ap-
+proach effectively mitigates memory thrashing while maximizing the advantages of paging. Our
+tests in Figure21 suggest that with our current prediction accuracy, these two policies are on par
+with vLLM’s greedy policy. When the prediction accuracy increases, these two policies can lower
+the average JCT by roughly 10%.
+3.5 Instance Flip
+ShuffleInfer scales out by allocating more hardware resources. Additionally, ShuffleInfer can also
+dynamically adjust the number of prefill and decode instances within fixed hardware resources.
+ThisiscrucialasLLMinferenceworkloadshavehugevariationsregardingprefillanddecodeneeds
+(see Figure1), and we cannot statically provision the ratio of prefill and decode instances in ad-
+vance. Below, we will describe our policy and mechanism to flip a prefill instance to become a
+decode instance and vice versa.
+Policy.As we described in Section3.2, the centralized control plane oversees all instances and
+has the latest load information. We design a transition watcher module that regularly checks the
+load and decides whether certain instances should be flipped. Various policies can be plugged in,
+such as flipping an instance if its load has been under 10% for the past minute.
+Mechanism. Once an instance is selected, we will go through the steps depicted in Figure10.
+To flip a prefill instance, the global scheduler stops forwarding requests and then sends a flip
+request to it. The prefill instance will wait until all queued requests are drained. Then, we flip
+the instance. Flipping a decode instance is slightly more complex. The global scheduler notifies
+ACM Trans. Arch. Code Optim., Vol. 22, No. 2, Article 77. Publication date: June 2025.
+
+---PAGE 14---
+77:14 C. Hu et al.
+Fig. 10. Prefill and Decode Instance Flip.Prefill and Decode instances share the same weights, allowing
+them to interchange roles.
+all prefill instances to stop forwarding requests to the selected decode instance and notifies
+the decode instance to complete flipping. Note that the actual flipping is fast and simple. It
+involves changing an internal variable without restarting the process or reloading models. In
+our current implementation, both instance flips take roughly 5 to 7 ms, excluding the dynamic
+draining time.
+4 Implementation
+We implement ShuffleInfer’s centralized control plane from scratch in Python. We adopt prefill
+and decode instances based on vLLM [28]. Most of our core modules are implemented in Python,
+except for the unified network stack, which utilizes C++ to interface with low-level APIs and IB
+Verbsfornetworktransfer.Intheunifiednetworkmodule,connectionsbetweenP/Dinstancesare
+established during the initialization phase, which creates C++ threads for handling data transmis-
+sionacrossvariouscommunicationprotocols,suchasNCCLorsocketprotocols,witheachthread
+corresponding to specific task queues. The instance maintains state information for each link to
+otherinstances,includingtheuniqueidentifier,destinationaddress,andport.Themainthreadas-
+signsthetransmissiontasktotheappropriatethreadqueuebasedonthetypeofreturnedaddress
+after completing the request prefill phase. Additionally, we implement a shared-memory-based
+communicationmechanismthatenablesfastcommandtransferacrossPythonandC++languages.
+The fine-tuning part uses Trainer APIs offered by HuggingFace Transformer [22].
+A prefill or decode instance is a single deployable unit consisting of two processes when de-
+ployed. For prefill, it has a Python process that runs the scheduler, length predictor, and the main
+LLM,aswellasaC++processthatrunsthedispatcherandthenetworkstack.Fordecode,ithasa
+Python process for running the scheduler and the main LLM, along with a C++ process that runs
+the network stack.
+Due to limited high-end hardware availability, our current implementation only supports the
+Indirect type using sockets (see Figure9).
+In order to evaluate ShuffleInfer’s performance across different hardware configurations, we
+have implemented a mock mechanism to emulate varying network bandwidth. This mechanism
+worksasfollows:foragivensetofrequests,weinitiallyruntheirprefillphaseofflinetoobtaintheir
+prefilledKVcache.Beforetesting,weloadtheseprefilledKVcachesintothedecodeinstance’slocal
+memory.Whentestingstarts,theprefillinstancetransmitsonlytherequestmetadatatothedecode
+instance,excludingtheactualprefilledKVcache.Subsequently,thedecodeinstancecalculatesthe
+ACM Trans. Arch. Code Optim., Vol. 22, No. 2, Article 77. Publication date: June 2025.
+
+---PAGE 15---
+ShuffleInfer: Disaggregate LLM Inference for Mixed Downstream Workloads 77:15
+latency of the KV cache transfer and waits accordingly. This latency is calculated given a specific
+model architecture and the hardware bandwidth we aim at emulatings.
+5 Evaluation
+We evaluate ShuffleInfer using public dataset [46] and report TTFT, JCT, and efficiency as in per-
+formance per dollar (perf/$), which is defined as the following formula:
+P/summationtext.1
+n∈cluster R(n) . (1)
+In this equation, whereP represents performance as in tokens/s,n represents a node in the in-
+ference cluster, andR(n) denotes resource usage time on noden. We assume that the cost per
+unit-time of resource usage is fixed, and in this article, we simply set it to one dollar.
+Our testbed consists of four NVIDIA V100 GPUs, each with 32 GB HBM. All GPUs are plugged
+into a single server with Xeon Gold 5218R CPU and 256 GB DRAM. In the experiments, we aim
+at testing the system’s throughput by continuously sending requests one by one, independently,
+with no interval time between them. For the large LLM, we run OPT-13B [60]. For the length
+prediction model, we use OPT-125M. We compare with vLLM [28]. Since we adopted ShuffleInfer
+after vLLM, both systems manage KV caches in pages. We do not use GPU sharing or instance
+flippingmechanisminSection 3.5duringthetest.UnlikeShuffleInfer,vanillavLLMtightlycouples
+prefill and decode phases.
+5.1 End-to-End Performance
+This section compares ShuffleInfer with vanilla vLLM using end-to-end benchmarks. We emulate
+ShuffleInferatoptwohardwaresetupsusingthemockmechanismdescribedinSection 4.Thefirst
+isTS-RoCE, assuming prefill and decode instances communicate over 200 Gbps RoCE (Direct-NIC
+in Figure9). The second is calledTS-NVLink, assuming instances communicate over 300 GBps
+NVLink (Direct in Figure9). Both setups are adopted from commercial V100-based servers.
+For all tests, the prefill instance’s scheduler uses the SJF policy as it has the best performance
+with thePrefillSched Batch set to 16 (see Figure18). For the inter-decode instance scheduling,
+we use the decentralized load-balancing algorithm as it outperforms other policies. For the intra-
+decodeinstancescheduling,weusethereserve-dynamicpolicyatoppagingasitcouldoutperform
+vLLM’s greedy policy (see Figure21). We flip an instance once it becomes idle for a minute using
+the mechanisms described in Section3.5.
+Tounderstandhowthesesystemsperformundermixeddownstreaminferencetasks,werunfive
+differenttypesofworkloadsaspresentedinFigure 1:HeavyPrefillwithLightDecode (HPLD),
+HeavyPrefillwithHeavyDecode (HPHD),LightPrefillwithHeavyDecode (LPHD),Light
+Prefill with Light Decode(LPLD), andMixed. Akin to the configuration used in Section2.2,
+prefill requests that have more than 512 prompt tokens are categorized as heavy, and others are
+light. Decode requests with more than 128 tokens are categorized as heavy as ShareGPT answers’
+medianlengthis128.WegeneratetheseworkloadsusingsamplesfromtheShareGPTdataset[ 46],
+following the distribution illustrated in Figure1.
+For each workload, we compare all systems across three key metrics:TTFT, JCT,a n dresource
+usagetime (i.e.,cost).ComparingTTFTindicateswhetherShuffleInfer’sprefillschedulerandchun-
+ked prefill are effective. Comparing JCT indicates whether ShuffleInfer’s disaggregated prefill
+and decode design and two-level decode scheduling are effective. A natural question that cen-
+tersaroundourdisaggregateddesigniscost.Intuitively,ShuffleInferusestwotimestheresources
+compared to vLLM’s prefill-decode-coupled setting. Our results suggest otherwise. Two factors
+contributed: first, ShuffleInfer’s prefill and decode run faster; second, ShuffleInfer can recycle or
+ACM Trans. Arch. Code Optim., Vol. 22, No. 2, Article 77. Publication date: June 2025.
+
+---PAGE 16---
+77:16 C. Hu et al.
+flipinstancestoreducewaste.Below,resourceusagetimerepresentstheaggregatedwalltimethat
+theprefillanddecodeinstancesusetorunaparticularworkload.Forexample,theresourceusage
+time is 3 seconds if we run prefill in 1 second and decode in 2 seconds. For vLLM, it is the total
+runtime since it couples prefill and decode.
+We now present each workload’s results.
+LightPrefillandLightDecode. Generally,LPLDrepresentsthechatworkload.WetestLPLD
+inFigure 11using128requests.WhencomparingShuffleInfertovLLM,wereduceaverageTTFTby
+44% and average JCT by 40% for both emulated hardware setups. Despite using twice the number
+of hardware cards, ShuffleInfer completes tasks almost twice as fast, resulting in resource usage
+time that is comparable to the vanilla vLLM. Thus, we improve perf/$ by 1.4×.
+Light Prefill and Heavy Decode.Generally, LPHD represents the content creation workload.
+WetestLPHDinFigure 12using128requests.Surprisingly,ShuffleInferimprovesaverageTTFTby
+97% despite using short prompts. This is because vLLM’s prefill incurs serious interference while
+runningprefillanddecoderequestsinthesamebatch;incontrast,ShuffleInferdisaggregatesthem
+intoseparateinstances.Additionally,withvariabledecodebatchsizeovervLLM’sfixedbatchsize
+during the decode phase, ShuffleInfer improves average JCT by 47% while using 38% less total
+hardware resources. Overall, we improve perf/$ by 2.4×.
+Heavy Prefill and Light Decode and Heavy Prefill and Heavy Decode. HPLD and HPHD
+represent summarization or prompt engineering types of workloads. Both have long prompt to-
+kens. This means ShuffleInfer faces two challenges: (a) large prefilled KV caches and (b) the main
+LLMmaybeimpactedbythepredictionmodel(roughly10%asshowninFigure 20).Nevertheless,
+in Figure13, we can see that ShuffleInfer still improves average TTFT and average JCT by 9% and
+23%,respectively,butatthecostof43%increaseinresourceusage.vLLMoutperformsShuffleInfer
+in terms of perf/$ by 14%. As Figure14 shows, with heavy decode, ShuffleInfer’s TTFT improve-
+ment is more pronounced because we disaggregated heavy decode from prefill, akin to Figure12.
+We improve the average JCT by 19% at the cost of 7% more resources, improving perf/$ by 1.1×.
+Mixed. The last workload is a mix of all the above workloads, randomly sampled from the
+ShareGPTdataset.Thisisthecasewhereaclusterisrunningallkindsofrequests.InFigure 15,we
+run128requests,sampledfromtheShareGPT,ShuffleInferlowersaverageTTFT,averageJCT,and
+resource usage by 85%, 50%, 21%, respectively, improving perf/$ by 1.9×. Additionally, we run 128
+requests sampled from the Alpaca [50] dataset, lowering 22.8% in average JCT on the V100 (Fig-
+ure16),and35.5%ontheA100(Figure 17),withperf/$improvementsof1.6 ×and1.8×,respectively.
+Takeaways.(1) For most LLM inference workloads, ShuffleInfer improve average TTFT, aver-
+age JCT, resource use time, and most importantly, perf/$ by a large margin. (2) Disaggregating
+prefillfromdecodeintotwodistinctinstancessignificantlyimprovesTTFTandefficiencybymin-
+imizinginterference,particularlyforworkloadswithheavydecodessuchasLPHDandHPHD.(3)
+ShuffleInfer’s design is not ideal for HPHD workloads as the room for improvement is small, and
+the overhead we introduce cannot be offset.
+5.2 Microbenchmark
+5.2.1 Prefill Scheduler. Below, we study the overhead of sorting requests, compare different
+policies,andstudytheimpactofbatchsizeonperformance.WerunOPT-13BTP=2, ChunkSizeis
+set to 512, and vLLM’s batch size is set to 16.
+Sort. Our scheduler sorts incoming requests based on the length of their input tokens if non-
+FCFS policies are used. We use Python’s native sort API. We find the sorting overhead ranges
+from 10s to 100s of microseconds, which is negligible compared to millisecond-level or second-
+level TTFT latency.
+ACM Trans. Arch. Code Optim., Vol. 22, No. 2, Article 77. Publication date: June 2025.
+
+---PAGE 17---
+ShuffleInfer: Disaggregate LLM Inference for Mixed Downstream Workloads 77:17
+Fig. 11.Light Prefill and Light Decode (LPLD).Fig. 12.Light Prefill and Heavy Decode (LPHD).
+Fig. 13.Heavy Prefill and Light Decode (HPLD).Fig. 14. Heavy Prefill and Heavy Decode
+(HPHD).
+Fig. 15. Mixed Prefill and Decode. Fig. 16. Alpaca[50] Mixed Prefill and Decode.
+Fig. 17.Alpaca Mixed A100 Prefill and Decode.Fig. 18.Scheduler Policies and Chunked Prefill.
+SchedulerPolicyandBatchSize. Figure18comparesShuffleInferusingchunkedprefillalong
+with FCFS, SJF, and LJF, against vanilla vLLM using fixed batch size for prefill. Requests used in
+this test follow the ShareGPT distribution. In the left part, we setPrefillSched Batch to 16.
+ComparedtovLLM’sfixedbatchmode,chunkedprefillalonewithFCFSimproveslatencyby86.4%.
+Additionally, the SJF scheduler policy further lowers the average waiting time by 7.8%. The right
+partexaminestheimpactofadjusting PrefillSchedBatch.Whenweincreasethebatchsizefrom
+16to128,SJF’saverageTTFTdecreasesby46.5%.TheimprovementinTTFTincreaseswithalarger
+scheduling batch.
+ChunkSize. ThechunksizeintheprefillphasecanbeestimatedusingtheGPU’scriticalarith-
+meticintensityandthemodel’ssize[ 15].However,forgreateraccuracy,weobtainamoreprecise
+value through experimentation. In our evaluation, we proportionally increase the input length
+in prefill, measuring both execution time and system throughput. The chunk size is defined by
+ACM Trans. Arch. Code Optim., Vol. 22, No. 2, Article 77. Publication date: June 2025.
+
+---PAGE 18---
+77:18 C. Hu et al.
+Fig. 19. ChunkSize in Model with Different
+Hardware. The chunk size of the same model
+on the different Hardware.
+Fig. 20. Running Large LLM with Prediction
+Model. The interference of the prediction model on
+the runtime model during concurrent running.
+the token count at which system throughput ceases to increase in proportion to input length.
+Additionally, chunk size varies with hardware computational capability, with the inflection point
+shiftingupwardascomputationalpowerimprovesduetothecomputation-intensivenatureofthe
+prefill phase. As Figure 19 shows the same models have different chunk sizes across A100 and
+V100.
+5.2.2 Length Predictor. Our length predictor uses the OPT-125M classification model to specu-
+late the decoding behavior of the OPT-13B model (Section3.3.2). This section studies the perfor-
+mance of both models and the prediction accuracy.
+In Figure20, we run stress tests among several settings regarding per-iteration latency and
+throughput.L-AlonemeansrunningtheOPT-13Bmodelalone,usingchunkedfillwith ChunkSize
+setto512. P-AlonemeansrunningtheOPT-125Mpredictionmodelalone.Itdoesnotusechunked
+prefill but uses dynamic batch sizes. It can group multiple requests into a batch. Due to the limi-
+tation of [22], we need to pad requests in a batch to the longest one. For example, if we have two
+requests in a batch, one has 100 tokens, and the other has 500 tokens. Then, we need to pad the
+first to 500 tokens. This is costly for requests with short prompts. Hence, we set a cutting limit.
+Requests higher than the limit will run alone. The default is 512 tokens.L+P512 means OPT-13B
+model’s performance if co-runs with the small OPT-125M in parallel. The suffix number means
+the max padded size. We can see that the large LLM’s prefill latency is roughly ten times of the
+small LLM’s. If we co-run both models and a padding limit of 512, 80% of large LLM’s prefill re-
+questsremainunchangedcomparedtowhenitrunsalone.Overall,whileco-runningwithasmall
+LLM,thelargeLLM’saverageprefilllatencyincreasesby10%,andthroughputdropsby12%.Note
+that these are stress tests. The impact will be smaller in practice.We believe beefier hardware can
+further mitigate the drop.
+We train our OPT-125M prediction model using 75 K training samples from ShareGPT, mixing
+differentrequestloaddistributions,toaccountforthepotentialdegradationofmodelperformance
+in various distributions. We test the model using three different bucket range granularities: 100,
+200,and400.Theaccuracyachievedbyourpredictionmodelforthesegranularitiesis58.9%,74.9%,
+and85%,respectively.Thepredictormodel’slatencyisonly13ms,withminimalimpactonoverall
+performance.
+Weconsiderbothsystemthroughputandmodelpredictionaccuracyinselectingthebucketsize.
+Bytestingrequestsofdifferentlengths,weobservethatsettingthebucketsizeto100or200reduces
+systemthroughput byapproximately 5% and 10%, respectively,comparedto the bucket size set to
+one. It also indicates the system performance variation between different buckets. Consequently,
+we choose a bucket size of 200 to optimize the prediction length range for improved accuracy.
+5.2.3 Decode Scheduling. We now study the scheduling policies related to decode instances.
+Wefirstcompareintra-decodeinstanceschedulerpolicies(Section 3.4)andthencomparedifferent
+ACM Trans. Arch. Code Optim., Vol. 22, No. 2, Article 77. Publication date: June 2025.
+
+---PAGE 19---
+ShuffleInfer: Disaggregate LLM Inference for Mixed Downstream Workloads 77:19
+Fig. 21. Intra-Decode Instance Scheduling. The
+comparisonofbenefitswhenusingdynamicmemory
+reservation algorithms within Decode.
+Fig.22. Inter-DecodeInstanceScheduling. Using
+length-aware algorithms for request distribution be-
+tween Prefill and Decode instances yields benefits.
+Fig. 23.Compare with Splitwise:The comparison of performance with Splitwise.
+loadbalancealgorithmsforinter-decodeinstancescheduling(Section 3.3.4).AlltestsuseOPT-13B
+with TP=2.
+We compare three intra-decode scheduler algorithms, namely vLLM’s greedy, ShuffleInfer’s
+reserve-static (RS), andreserve-dynamic (RD) in Figure21. We run 256 requests following
+ShareGPT distribution. Our policies estimate resource usage using the predicted length range’s
+lower end. We compare using the actual accuracy (acc-200 74.9%) and an ideal accuracy of 100%.
+While using the actual accuracy, reserve-dynamic achieves the same JCT as vLLM’s greedy al-
+gorithm. When using an ideal prediction accuracy, reserve-dynamic and reserve-static improve
+averageJCTby12%and10%,respectively.Thisisbecauseourpoliciescarefullyprovisionrequests
+based on their memory usage.
+We compare three distributed load balance algorithms in Figure22. Firstly, we present ourde-
+centralizedpower-of-two algorithm,designedtodistributerequestsbasedonpredictedlength.The
+second israndom, in which the prefill instance randomly chooses a decode instance. The third al-
+gorithm,imbalance,simulatesaworst-casescenariowhereheavydecoderequestsareconsistently
+directedtothesamedecodeinstances.Werun32requestsperdecodeinstance,spanningtherange
+of2to8decodeinstances.Figure 22’sleftpartshowsthatShuffleInfer’sdecentralizedloadbalanc-
+ingalgorithmiseffective,achievingthelowesttotaldecodingtime.Therightpartshowsthenum-
+ber of heavy decode and light decode requests in the slowest instance. ShuffleInfer’s inter-decode
+schedulingalgorithmevenlybalancesloadacrossinstances,whichavoidsinterferencesmeasured
+in Section2.2.3.
+5.3 Comparisons With Disaggregated LLM System
+This section compares ShuffleInfer and Splitwise [41] using the same distribution dataset as in
+Splitwise[41]. We emulate Splitwise, which is state-of-the-art disaggregated LLM system and
+ACM Trans. Arch. Code Optim., Vol. 22, No. 2, Article 77. Publication date: June 2025.
+
+---PAGE 20---
+77:20 C. Hu et al.
+Table 1.Disaggregated-Prefill-Decode Works
+Work ShuffleInfer Splitwise Distserve Dejavu
+PD Parallelism Homogenous Homogenous Heterogeneous Heterogeneous
+PD Ratio Manual Simulator Simulator Simulator
+PD Dynamic Scaling Role Flip Re-purpose Replan Replan
+KV Granularity Request Layer Request Layer
+KV Transfer Mechanism Push Push Pull Push
+KV Transfer Location HBM HBM HBM DRAM
+P2D Schedule Predicted Pre-choose Decode’s load ×
+P Schedule FCFS/SJF/LJF FCFS FCFS FCFS
+D Schedule R.D default default default
+PD Fault Handling × × × Replication
+(1) PD Parallelism: Whether PD instances use the same parallelism setting (homogenous) or not (heterogeneous).
+(2) PD Ratio: manual means the number of PD instances is determined manually, while simulator means they are
+calculated using an algorithm. (3) PD Dynamic Scaling: whether the number of P and D instances can change during
+runtime. Re-purpose means choosing a decoding instance again if a failure occurs. Replan denotes re-deploying all
+machines for either the prefill or decode instance. (4) KV Transfer Granularity: by-layer and by-request. (5) KV
+Transfer Mechanism: Pull-based and Push-based. (6) KV Transfer Location: refers to where P will transfer the KV to.
+(7) P2D Schedule: given a set of D instances, how does P decide to forward a request to which D. Pre-choose refers to a
+method where the global scheduler selects a fixed prefill and decode instance based on the request number before
+execution. Decode’s load denotes that the decode instance is chosen based on the number of requests after the prefill
+phase. Static refers to the use of a general policy, such as round-robin or random selection, without considering
+workload adjustments. (8) P Schedule: the scheduling algorithm at the prefill instance. (9) D Schedule: the scheduling
+algorithm at the decode instance, default means schedule requests by block granularity. (10) PD Failure Handling:
+whether the works support PD failure handling.
+proposes by-layer KV transmission. Both setups are adopted from four commercial V100-based
+serversoverTS-NvLink.Figure 23showsthatShuffleInferimprovestheaverageTTFTby44%and
+reduces average JCT by 17%. Overall, we improve perf/$ by 1.4×. The improvements stem from
+ShuffleInfer’s chunked prefill and scheduling policy, which reduce first-token latency. Its length-
+based scheduling strategy also ensures balanced load distribution across decoding instances, op-
+timizing resource use. In contrast, Splitwise [41] transmits KV cache per layer, which improves
+the TTST performance. However, it does not consider the reduction of initial token latency and
+balancing loads, therebyhighlighting ShuffleInfer ’s advantages in reducing TTFT and improving
+overall performance efficiency.
+6R e l a t e d W o r k
+Disaggregated Prefill and Decode.We are among the first to propose this idea, concurrent to
+Splitwise[41],Distserve[ 62],andDejavu[ 49].Table 1comparesthesefourworksacrosstendimen-
+sions.Overall,disaggregatedprefillanddecodedemandsasystematicdesignapproachthatrefers
+to various factors, including request scheduling, KV cache transfer, and heterogeneous machine
+configurations. Each work shines with its unique contribution. We will further discuss several
+works in detail below.
+Splitwise [41] focuses on Disaggregated-PD under heterogeneous computational resources,
+while DistServe [62] explores different parallel strategies across the two phases. Dejavu [49]a d -
+dresses fault tolerance in KV cache transfer. In contrast, our work focuses on scheduling both
+within and between each phase, to minimize interference between different requests and maxi-
+mize resource utilization within the inference cluster.
+(a)PrefillSchedule: Splitwise[41],Distserve[ 62],andDejavu[ 49]userequestbatchingstrate-
+gies. ShuffleInfer highlights that handling larger concurrent requests can create GPU bottlenecks,
+ACM Trans. Arch. Code Optim., Vol. 22, No. 2, Article 77. Publication date: June 2025.
+
+---PAGE 21---
+ShuffleInfer: Disaggregate LLM Inference for Mixed Downstream Workloads 77:21
+increasing latency across all requests without improving throughput. Conversely, fewer concur-
+rentrequestscanleadtounderutilizedresources.ShuffleInferaddressesthiswitharequestsched-
+uling approach that combines chunked prefill and a window-based policy, reducing queue block-
+ing from lengthy requests and ensuring each prefill round maximizes compute power, balancing
+throughput and latency.
+(b)Prefill2DecodeSchedule :Splitwise[ 41]selectsafixedprefillanddecodeinstancebasedon
+thenumberofrequestsbeforerequestexecution,andDistserve[ 62]usesthenumberofrequestsin
+thedecodeinstancetoschedulerequestsfromprefilltodecode,whileDejavu[ 49]employsround-
+robin or random selection, all of which often lead to unbalanced load distribution. ShuffleInfer
+introducesaschedulingstrategybasedonlengthprediction,usingthetokencounttoensureload
+balance across decode instances.
+(c)DecodeSchedule :Splitwise[ 41],Distserve[ 62],andDejavu[ 49]useblock-levelgranularity
+forschedulingduringdecodeexecution,whichcanleadtofrequentswappingunderheavyrequest
+loads. In contrast, ShuffleInfer proposes a safety determination method batch based on length
+prediction. New requests are scheduled only when the smallest request in the batch meets its
+required block count.
+(d) PD Dynamic Scaling: ShuffleInfer employs a homogeneous deployment scheme, enabling
+a P/D flip mechanism without the need to reload the model. Distserve [62] proposes a search
+strategytodeterminetheoptimalP/Dinstanceratio,achallengenotaddressedbySplitwise[ 41]or
+Dejavu[49].Homogeneousdeploymentrequiresaflexiblestrategy,whiledynamicheterogeneous
+instances necessitate reloading model weights.
+(e) KV Transfer Location:D e j a v u[49] introduces a multi-level cache system for KV cache
+placement, freeing GPU memory for execution. In contrast, Splitwise [41], Distserve [62], and
+ShuffleInfer store the KV cache exclusively in the high bandwidth memory of the GPU.
+Other works. Sarathi [2] proposes chunked prefill [2] to overcome suboptimal prefill pro-
+cessing. Sarathi-serve [1] proposes online inferences serving based on Sarathi [2]. They run
+prefill-decode-mixedchunks.Incontrast,ShuffleInferrunsprefill-onlychunksasweobservenon-
+negligible interference between prefill and decode, thus choosing to disaggregate prefill from de-
+code. FastServe [54] utilizes a multi-level priority feedback queue to minimize JCT. In contrast,
+ShuffleInferutilizestwo-levelschedulingforprefillanddecodeinstances.Ourpoliciesareworking-
+set-aware, reducing interference and swaps thereby improving JCT and efficiency. Many recent
+work focus on optimizing batching, caching, and scheduling [3, 6, 16, 21, 30–32, 39, 43]. Specif-
+ically, Orca [58] introduce the iterative-level scheduling. Sheng et al. [47]h a v ep r o p o s e daf a i r
+scheduler based on the continuous batching mechanism. Prema [6] have proposed a predictive
+multi-task scheduling algorithm for preemptible neural processing units. Many works try to op-
+timize memory usage. For example, using quantization[10, 11, 14, 25, 29, 48, 55, 56]t oc o m p r e s s
+the model weights into lower precision, using paging to reduce fragmentation [28], and low-level
+algorithm and kernel optimizations [8, 9, 20, 33, 52, 57, 59]. Those works are orthogonal to our
+efforts to mitigate interference.
+7 Conclusion and Future Work
+We propose ShuffleInfer, an LLM inference serving system designed to battle interference. Our
+key insight is to carefully schedule and group inference requests based on their characteristics.
+It has three key parts. First, it partitions prompts into fixed-size chunks, ensuring the accelerator
+consistently operates at its computation-saturated limit. Second, it disaggregates prefill and
+decode instances to avoid interference when mixing them together. Finally, it uses a smart two-
+level scheduling algorithm to avoid decode scheduling hotspots. Results show that ShuffleInfer
+ACM Trans. Arch. Code Optim., Vol. 22, No. 2, Article 77. Publication date: June 2025.
+
+---PAGE 22---
+77:22 C. Hu et al.
+improves time-to-first-token, job completion time, and inference efficiency in terms of perfor-
+mance per dollar by a large margin.
+In future deployments, ShuffleInfer can serve as an inference backend for both Triton[39]a n d
+RayServe[45], which support horizontal scaling of inference instances and load balancing of re-
+quests. This enables the creation of an efficient and scalable language model inference service.
+Furthermore, these systems allow ShuffleInfer to be integrated with other services, such as data
+preprocessing, enabling a more universal inference paradigm.
+Acknowledegments
+We thank all reviewers for their insightful comments.
+References
+[1] Amey Agrawal, Nitin Kedia, Ashish Panwar, Jayashree Mohan, Nipun Kwatra, Bhargav Gulavani, Alexey Tumanov,
+and Ramachandran Ramjee. 2024. Taming throughput-latency tradeoff in LLM inference with sarathi-serve. In18th
+USENIX Symposium on Operating Systems Design and Implementation (OSDI’24).
+[2] Amey Agrawal, Ashish Panwar, Jayashree Mohan, Nipun Kwatra, Bhargav S Gulavani, and Ramachandran Ramjee.
+2023.Sarathi:Efficientllminferencebypiggybackingdecodeswithchunkedprefills.arXiv:2308.16369.Retrievedfrom
+https://arxiv.org/abs/2308.16369
+[3] RezaYazdaniAminabadi,SamyamRajbhandari,AmmarAhmadAwan,ChengLi,DuLi,EltonZheng,OlatunjiRuwase,
+ShadenSmith,MinjiaZhang,JeffRasley,etal.2022.DeepSpeed-inference:Enablingefficientinferenceoftransformer
+models at unprecedented scale. InProceedings of the International Conference for High Performance Computing, Net-
+working, Storage and Analysis.
+[4] AWS Bedrock. 2024. LLM Parameter. Retrieved 5 January 2024 fromhttps://docs.aws.amazon.com/bedrock/latest/
+userguide/inference-parameters.html
+[5] XueyingDu,MingweiLiu,KaixinWang,HanlinWang,JunweiLiu,YixuanChen,JiayiFeng,ChaofengSha,XinPeng,
+andYilingLou.2021.Evaluatinglargelanguagemodelsinclass-levelcodegeneration.In ProceedingsoftheIEEE/ACM
+46th International Conference on Software Engineering (ICSE’24).
+[6] Yujeong Choi and Minsoo Rhu. 2020. Prema: A predictive multi-task scheduling algorithm for preemptible neural
+processing units. InProceedings of the IEEE International Symposium on High Performance Computer Architecture.
+[7] MosharafChowdhury,YuanZhong,andIonStoica.2014.Efficientcoflowschedulingwithvarys.In Proceedingsofthe
+2014 ACM Conference on SIGCOMM.
+[8] Tri Dao.FlashAttention-2: Faster attentionwithbetterparallelism andwork partitioning.In International Conference
+on Learning Representations (ICLR’24).
+[9] Tri Dao, Dan Fu, Stefano Ermon, Atri Rudra, and Christopher Ré. 2022. Flashattention: Fast and memory-efficient
+exact attention with io-awareness. InProceedings of the Advances in Neural Information Processing Systems.
+[10] TimDettmers,MikeLewis,YounesBelkada,andLukeZettlemoyer.2022.Gpt3.int8():8-bitmatrixmultiplicationfor
+transformers at scale. InProceedings of the Advances in Neural Information Processing Systems.
+[11] Tim Dettmers, Ruslan Svirschevski, Vage Egiazarian, Denis Kuznedelev, Elias Frantar, Saleh Ashkboos, Alexander
+Borzunov, Torsten Hoefler, and Dan Alistarh. 2024. Spqr: A sparse-quantized representation for near-lossless llm
+weight compression. InThe Twelfth International Conference on Learning Representations (ICLR’24).
+[12] Xin Luna Dong, Seungwhan Moon, Yifan Ethan Xu, Kshitiz Malik, and Zhou Yu. 2023. Towards next-generation
+intelligent assistants leveraging LLM techniques. InProceedings of the 29th ACM SIGKDD Conference on Knowledge
+Discovery and Data Mining.
+[13] Aleksandar Dragojević, Dushyanth Narayanan, Miguel Castro, and Orion Hodson. 2014. FaRM: Fast remote memory.
+InProceedings of the 11th USENIX Symposium on Networked Systems Design and Implementation.
+[14] Elias Frantar, Saleh Ashkboos, Torsten Hoefler, and Dan Alistarh. 2022. OPTQ: Accurate quantization for generative
+pre-trained transformers. InProceedings of the 11th International Conference on Learning Representations.
+[15] Yao Fu. 2024. Challenges in deploying long-context transformers: A theoretical peak performance analysis.
+arXiv:2405.08944. Retrieved fromhttps://arxiv.org/abs/2405.08944
+[16] YaoFu,LeyangXue,YeqiHuang,Andrei-OctavianBrabete,DmitriiUstiugov,YuvrajPatel,andLuoMai.2024.Server-
+lessllm: Locality-enhanced serverless inference for large language models. In18th USENIX Symposium on Operating
+Systems Design and Implementation (OSDI’24).
+[17] Zhiyuan Guo, Yizhou Shan, Xuhao Luo, Yutong Huang, and Yiying Zhang. 2022. Clio: A hardware-software co-
+designed disaggregated memory system. InProceedings of the 27th ACM International Conference on Architectural
+Support for Programming Languages and Operating Systems.
+ACM Trans. Arch. Code Optim., Vol. 22, No. 2, Article 77. Publication date: June 2025.
+
+---PAGE 23---
+ShuffleInfer: Disaggregate LLM Inference for Mixed Downstream Workloads 77:23
+[18] HiAscend.2023.Atlas900AICluster.Retrieved5January2024from https://www.hiascend.com/en/hardware/cluster
+[19] HiAscend.2023.CANNaclrtMemcpy.Retrieved5January2024from https://www.hiascend.com/document/detail/en/
+canncommercial/601/inferapplicationdev/aclcppdevg/aclcppdevg_03_0081.html
+[20] Ke Hong, Guohao Dai, Jiaming Xu, Qiuli Mao, Xiuhong Li, Jun Liu, Kangdi Chen, Yuhan Dong, and Yu Wang. 2024.
+Flashdecoding++: Faster large language model inference with asynchronization, flat gemm optimization, and heuris-
+tics. InProceedings of Machine Learning and Systems6 (2024), 148–161.
+[21] Cunchen Hu, Heyang Huang, Junhao Hu, Jiang Xu, Xusheng Chen, Tao Xie, Chenxi Wang, Sa Wang, Yungang
+Bao, Ninghui Sun, et al. 2024. Memserve: Context caching for disaggregated llm serving with elastic memory pool.
+arXiv:2406.17565. Retrieved fromhttps://arxiv.org/abs/2406.17565
+[22] HugginFace. 2022. Retrieved 5 January 2024 from https://huggingface.co/docs/transformers/model_doc/opt#
+transformers.OPTForSequenceClassification
+[23] Hugging Face. 2023. Summarization. Retrieved 5 January 2024 from https://huggingface.co/datasets/
+ZhongshengWang/Alpaca-pubmed-summarization
+[24] Hugging Face. 2023. Writing. Retrieved 5 January 2024 fromhttps://huggingface.co/datasets/lancexiao/write_doc_
+sft_v1
+[25] Berivan Isik, Hermann Kumbong, Wanyi Ning, Xiaozhe Yao, Sanmi Koyejo, and Ce Zhang. 2023. GPT-Zip: Deep
+compression of finetuned large language models. InProceedings of the Workshop on Efficient Systems for Foundation
+Models.
+[26] Akshay Jajoo, Y. Charlie Hu, and Xiaojun Lin. 2022. A case for sampling-based learning techniques in coflow sched-
+uling. IEEE/ACM Transactions on Networking30, 4 (2022), 1494–1508.
+[27] A Jo. 2023. The promise and peril of generative AI.Nature 614, 1 (2023), 214–216.
+[28] WoosukKwon,ZhuohanLi,SiyuanZhuang,YingSheng,LianminZheng,CodyHaoYu,JosephGonzalez,HaoZhang,
+and Ion Stoica. 2023. Efficient memory management for large language model serving with pagedattention. InPro-
+ceedings of the 29th Symposium on Operating Systems Principles.
+[29] Zhuohan Li, Eric Wallace, Sheng Shen, Kevin Lin, Kurt Keutzer, Dan Klein, and Joey Gonzalez. 2020. Train big, then
+compress:Rethinkingmodelsizeforefficienttrainingandinferenceoftransformers.In ProceedingsoftheInternational
+Conference on machine learning.
+[30] Zhuohan Li, Lianmin Zheng, Yinmin Zhong, Vincent Liu, Ying Sheng, Xin Jin, Yanping Huang, Zhifeng Chen, Hao
+Zhang, Joseph E. Gonzalez, et al. 2023. AlpaServe: Statistical multiplexing with model parallelism for deep learning
+serving. InProceedings of the 17th USENIX Symposium on Operating Systems Design and Implementation.
+[31] Bin Lin, Chen Zhang, Tao Peng, Hanyu Zhao, Wencong Xiao, Minmin Sun, Anmin Liu, Zhipeng Zhang, Lanbo Li,
+Xiafei Qiu, et al. 2024. Infinite-llm: Efficient llm service for long context with distattention and distributed kvcache.
+arXiv:2401.02669. Retrieved fromhttps://arxiv.org/abs/2401.02669
+[32] Yuhan Liu, Hanchen Li, Yihua Cheng, Siddhant Ray, Yuyang Huang, Qizheng Zhang, Kuntai Du, Jiayi Yao, Shan Lu,
+GaneshAnanthanarayanan,etal.2024.Cachegen:Kvcachecompressionandstreamingforfastlargelanguagemodel
+serving. InProceedings of the ACM SIGCOMM 2024 Conference.
+[33] Lingxiao Ma, Zhiqiang Xie, Zhi Yang, Jilong Xue, Youshan Miao, Wei Cui, Wenxiang Hu, Fan Yang, Lintao Zhang,
+and Lidong Zhou. 2020. Rammer: Enabling holistic deep learning compiler optimizations with rTasks. InProceedings
+of the 14th USENIX Symposium on Operating Systems Design and Implementation.
+[34] NGINX. 2001. NGINX. Retrieved 5 January 2024 fromhttps://www.nginx.com/blog/nginx-power-of-two-choices-
+load-balancing-algorithm/
+[35] NVIDIA. 2019. GPU Direct. Retrieved 5 January 2024 fromhttps://developer.nvidia.com/gpudirect
+[36] NVIDIA. 2020. NCCL. Retrieved 5 January 2024 fromhttps://docs.nvidia.com/deeplearning/nccl/user-guide/docs/
+overview.html
+[37] NVIDIA. 2022. CUDA Runtime API Memory Management. Retrieved 5 January 2024 fromhttps://docs.nvidia.com/
+cuda/cuda-runtime-api/group__CUDART__MEMORY.html
+[38] NVIDIA, FasterTransformer. 2021. Retrieved 5 January 2024 fromhttps://github.com/NVIDIA/FasterTransformer
+[39] NVIDIA, Triton Inference Server. 2024. Retrieved 5 January 2024 fromhttps://developer.nvidia.com/
+[40] Charles Packer, Sarah Wooders, Kevin Lin, Vivian Fang, Shishir G. Patil, Ion Stoica, and Joseph E. Gonzalez. 2023.
+Memgpt: Towards llms as operating systems. arXiv:2310.08560. Retrieved fromhttps://arxiv.org/abs/2310.08560
+[41] PratyushPatel,EshaChoukse,ChaojieZhang,AashakaShah,ÍñigoGoiri,SaeedMaleki,andRicardoBianchini.2024.
+Splitwise: Efficient generative llm inference using phase splitting. InProceedings of the ACM/IEEE 51st Annual Inter-
+national Symposium on Computer Architecture.
+[42] Reiner Pope, Sholto Douglas, Aakanksha Chowdhery, Jacob Devlin, James Bradbury, Jonathan Heek, Kefan Xiao,
+Shivani Agrawal, and Jeff Dean. 2023. Efficiently scaling transformer inference.Proceedings of Machine Learning and
+Systems 5 (2023), 606–624.
+ACM Trans. Arch. Code Optim., Vol. 22, No. 2, Article 77. Publication date: June 2025.
+
+---PAGE 24---
+77:24 C. Hu et al.
+[43] RuoyuQin,ZhemingLi,Weiran He,JialeiCui,Feng Ren,MingxingZhang,YongweiWu,WeiminZheng,andXinran
+Xu.2025.Mooncake:Tradingmorestorageforlesscomputation—akvcachecentricarchitectureforservingllmchatbot.
+In23rd USENIX Conference on File and Storage Technologies (FAST’25).
+[44] AdityaRamesh,Mikhail Pavlov,GabrielGoh,ScottGray,Chelsea Voss,AlecRadford,MarkChen,andIlyaSutskever.
+2021. Zero-shot text-to-image generation. InProceedings of the International Conference on Machine Learning.
+[45] Ray Serve. 2023. Ray Serve. Retrieved 5 January 2024 fromhttps://docs.ray.io/en/latest/serve/index.html
+[46] Sharegpt teams. 2023. ShareGPT. Retrieved 5 January 2024 fromhttps://sharegpt.com/
+[47] Ying Sheng, Shiyi Cao, Dacheng Li, Banghua Zhu, Zhuohan Li, Danyang Zhuo, Joseph E. Gonzalez, and Ion Stoica.
+2024. Fairness in serving large language models. InProceedings of the 18th USENIX Symposium on Operating Systems
+Design and Implementation.
+[48] YingSheng,LianminZheng,BinhangYuan,ZhuohanLi,MaxRyabinin,BeidiChen,PercyLiang,ChristopherRé,Ion
+Stoica, and Ce Zhang. 2023. Flexgen: High-throughput generative inference of large language models with a single
+GPU. InProceedings of the International Conference on Machine Learning.
+[49] FoteiniStrati,SaraMcallister,AmarPhanishayee,JakubTarnawski,andAnaKlimovic.2024.DéjàVu:KV-cachestream-
+ingforfast,fault-tolerantgenerativeLLMserving.arXiv:2403.01876.Retrievedfrom https://arxiv.org/abs/2403.01876
+[50] RohanTaori,IshaanGulrajani,TianyiZhang,YannDubois,XuechenLi,CarlosGuestrin,PercyLiang,andTatsunoriB.
+Hashimoto.2023.StanfordAlpaca:AnInstruction-followingLLaMAmodel.Retrieved15July2024from https://github.
+com/tatsu-lab/stanford_alpaca
+[51] Hugo Touvron, Louis Martin, Kevin Stone, Peter Albert, Amjad Almahairi, Yasmine Babaei, Nikolay Bashlykov,
+Soumya Batra, Prajjwal Bhargava, Shruti Bhosale, et al. 2023. Llama 2: Open foundation and fine-tuned chat mod-
+els. arXiv:2307.09288. Retrieved fromhttps://arxiv.org/abs/2307.09288
+[52] Xiaohui Wang, Ying Xiong, Yang Wei, Mingxuan Wang, and Lei Li. Lightseq: A high performance inference library
+for transformers.NAACL-HLT. 113–120.
+[53] Wikipedia. 2014. NVLink. Retrieved 5 January 2024 fromhttps://en.wikipedia.org/wiki/NVLink
+[54] Bingyang Wu, Yinmin Zhong, Zili Zhang, Gang Huang, Xuanzhe Liu, and Xin Jin. 2023. Fast distributed inference
+serving for large language models. arXiv:2305.05920. Retrieved fromhttps://arxiv.org/abs/2305.05920
+[55] Guangxuan Xiao, Ji Lin, Mickael Seznec, Hao Wu, Julien Demouth, and Song Han. 2023. Smoothquant: Accurate
+and efficient post-training quantization for large language models. InProceedings of the International Conference on
+Machine Learning.
+[56] Zhewei Yao, Cheng Li, Xiaoxia Wu, Stephen Youn, and Yuxiong He. 2023. A comprehensive study on post-training
+quantization for large language models. arXiv:2303.08302. Retrieved fromhttps://arxiv.org/abs/2303.08302
+[57] Zhewei Yao, Reza Yazdani Aminabadi, Minjia Zhang, Xiaoxia Wu, Conglong Li, and Yuxiong He. 2022. Zeroquant:
+Efficient and affordable post-training quantization for large-scale transformers. InProceedings of the Advances in
+Neural Information Processing Systems.
+[58] Gyeong-In Yu, Joo Seong Jeong, Geon-Woo Kim, Soojeong Kim, and Byung-Gon Chun. 2022. Orca: A distributed
+serving system for transformer-based generative models. InProceedings of the 16th USENIX Symposium on Operating
+Systems Design and Implementation.
+[59] Yujia Zhai, Chengquan Jiang, Leyuan Wang, Xiaoying Jia, Shang Zhang, Zizhong Chen, Xin Liu, and Yibo Zhu. 2023.
+ByteTransformer:Ahigh-performancetransformerboostedforvariable-lengthinputs.In Proceedingsofthe2023IEEE
+International Parallel and Distributed Processing Symposium.
+[60] Susan Zhang, Stephen Roller, Naman Goyal, Mikel Artetxe, Moya Chen, Shuohui Chen, Christopher Dewan, Mona
+Diab, Xian Li, Xi Victoria Lin, et al. 2022. Opt: Open pre-trained transformer language models. arXiv:2205.01068.
+Retrieved fromhttps://arxiv.org/abs/2205.01068
+[61] ZangweiZheng,XiaozheRen,FuzhaoXue,YangLuo,XinJiang,andYangYou.2024.Responselengthperceptionand
+sequencescheduling:Anllm-empoweredllminferencepipeline.In ProceedingsoftheAdvancesinNeuralInformation
+Processing Systems.
+[62] YinminZhong,ShengyuLiu,JundaChen,JianboHu,YiboZhu,XuanzheLiu,XinJin,andHaoZhang.2024.DistServe:
+Disaggregatingprefillanddecodingforgoodput-optimizedlargelanguagemodelserving.In 18thUSENIXSymposium
+on Operating Systems Design and Implementation (OSDI’24).
+Received 22 July 2024; revised 11 February 2025; accepted 13 April 2025
+ACM Trans. Arch. Code Optim., Vol. 22, No. 2, Article 77. Publication date: June 2025.
