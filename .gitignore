@@ -1,5 +1,6 @@
 # LaTeX temporary files
 /PhaseServe.pdf
+/paper/PhaseServe.pdf
 *.aux
 *.bbl
 *.blg
@@ -26,6 +27,14 @@ __pycache__/
 server.log
 pressure_snapshot.json
 phase_metrics.jsonl
+
+# Local Codex skill assets are tool-local, not PhaseServe source.
+.codex/skills/*/assets/
+
+# Regenerated from docs/figures/data and scripts/plot_end_to_end.py.
+docs/figures/*.pdf
+docs/figures/*.png
+docs/figures/*.svg
 
 # Local temporary output
 tmp/
