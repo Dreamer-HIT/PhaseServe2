@@ -1,0 +1,18 @@
+{
+  "complete_targeted_runs": 48,
+  "dataset_paths": {
+    "0": {
+      "dataset": "/root/data/phase_scheduler_results/stage4o_e2e_full_matrix_20260531_234957/opt13b_sharegpt/datasets/opt13b_sharegpt_seed_0_128.ds",
+      "metadata": "/root/data/phase_scheduler_results/stage4o_e2e_full_matrix_20260531_234957/opt13b_sharegpt/datasets/opt13b_sharegpt_seed_0_128.metadata.json"
+    },
+    "1": {
+      "dataset": "/root/data/phase_scheduler_results/stage4o_e2e_full_matrix_20260531_234957/opt13b_sharegpt/datasets/opt13b_sharegpt_seed_1_128.ds",
+      "metadata": "/root/data/phase_scheduler_results/stage4o_e2e_full_matrix_20260531_234957/opt13b_sharegpt/datasets/opt13b_sharegpt_seed_1_128.metadata.json"
+    }
+  },
+  "e2e_combo_root": "/root/data/phase_scheduler_results/stage4o_e2e_full_matrix_20260531_234957/opt13b_sharegpt",
+  "expected_targeted_runs": 48,
+  "incomplete": [],
+  "missing": [],
+  "target_root": "/root/data/phase_scheduler_results/stage4p_targeted_ablation_20260601_101528/opt13b_sharegpt_ablation"
+}

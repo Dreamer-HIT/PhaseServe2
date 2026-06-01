@@ -2,6 +2,8 @@
 
 This repository contains the PhaseServe research workspace: the current methodology notes, the modified DistServe code, experiment scripts, lightweight result summaries, and the paper draft.
 
+For AI-agent context that should survive conversation compaction, see `AGENTS.md`.
+
 ## Layout
 
 - `remote_distserve/`: modified DistServe source and benchmark harnesses.

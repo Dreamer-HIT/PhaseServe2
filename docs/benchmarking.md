@@ -124,16 +124,16 @@ MAX_TOTAL_TOKENS=4096 \
 
 注意：lifecycle breakdown 使用服务端 `time.time()` 事件之间的差值；TTFT/TPOT/E2E 使用 API server 返回的 `time.perf_counter()` timestamp，因此不要混合两类绝对时间，只比较差值。
 
-## 当前 SLO 口径
+## SLO 口径
 
-早期脚本示例中的 `--slo-ttft-s 0.25` / `--slo-tpot-s 0.05` 只适合 tiny smoke，不适合作为 13B 论文结果。Stage 4D 的 OPT-13B / LLaMA-13B mixed-wide 主结果使用：
+早期脚本示例中的 `--slo-ttft-s 0.25` / `--slo-tpot-s 0.05` 只适合 tiny smoke，不适合作为 13B 论文结果。Stage 4D 的 OPT-13B / LLaMA-13B mixed-wide 探索结果使用：
 
 ```text
 TTFT <= 5s
 TPOT <= 0.12s
 ```
 
-旧口径 `TTFT<=10s, TPOT<=1s` 对 13B mixed-regime 过松，只作为 sanity check 或历史记录。tight/medium/loose SLO grid 仍可用于 sensitivity，但主图应固定使用同一 SLO，不按 rate 单独调整。
+旧口径 `TTFT<=10s, TPOT<=1s` 对 13B mixed-regime 过松，只作为 sanity check、调试或历史记录。最终论文图的 SLO 口径尚未冻结，应以 `docs/final_results_index.md` 中列出的最新结果和后续 Stage 4M 复验为准。tight/medium/loose SLO grid 仍可用于 sensitivity，但主图应固定使用同一 SLO，不按 rate 单独调整。
 
 ## 历史 Stage 4D 矩阵
 
@@ -148,7 +148,7 @@ TPOT <= 0.12s
 | request rate | TTFT 主窗口 per-GPU `2/3/4/5/6/8` req/s；TPOT 主窗口 per-GPU `2/3/4/5/6/8/10/12/14/16` req/s；SLO scale 固定 per-GPU `6` req/s |
 | metrics | SLO attainment, TTFT p90/p95, TPOT p50/p90, throughput/goodput, bucket breakdown |
 
-Stage 4D 已完成 `fcfs` vs `phase` 的双模型、双 seed 主结果，并补充了 TPOT high-rate per-GPU `14/16` 确认矩阵。下一步推荐在代表性 rate 上补 `bps/kas/bps_kas/phase` 消融，而不是继续扩大 rate 搜索。
+Stage 4D 已完成 `fcfs` vs `phase` 的双模型、双 seed探索结果，并补充了 TPOT high-rate per-GPU `14/16` 确认矩阵。它保留为历史机制和画图经验。当前可引用结果入口转为 `docs/final_results_index.md`；下一步推荐在最新 Stage 4L 窗口上补 seed 和最终消融，而不是继续扩大旧 Stage 4D rate 搜索。
 
 ## 注意事项
 

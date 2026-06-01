@@ -79,7 +79,7 @@ Layer 3 用于定位实现问题、做参数敏感性和解释失败边界。它
 - rate 粒度至少为 `0.5 req/s/GPU`；
 - 区间内每个 rate 点，PhaseServe 相比 DistServe 在 TTFT 的 `p50/p90/p95/p99` 中至少两个指标改善 `>=20%`；
 - 同一区间内每个 rate 点，PhaseServe 相比 DistServe 在 TPOT 的 `p50/p90/p95/p99` 中至少两个指标改善 `>=20%`；
-- 每个点至少使用两个 seed；最终论文主结果优先补到三个 seed。
+- 每个点至少使用两个 seed；当前主实验协议固定为 seed0 + seed1。第三个 seed 只作为可选诊断/边界 evidence，不进入主图或主 claim，除非重新开启 seed policy。
 
 该目标是内部收敛标准，不是预先承诺的论文 claim。若 Layer 1 真实 workload 无法满足该 strict 2-wide 目标，不能直接切换到手工挑选长度集合来满足目标，而应按顺序处理：
 

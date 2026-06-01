@@ -39,3 +39,4 @@ docs/figures/*.svg
 # Local temporary output
 tmp/
 logs/
+.codex_tmp/
