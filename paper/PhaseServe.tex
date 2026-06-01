@@ -54,7 +54,7 @@
 \maketitle
 
 \begin{abstract}
-Large language model (LLM) inference has become increasingly important across a wide range of AI applications, yet efficient serving remains challenging due to the two-phase nature of LLM execution: prefill and decoding. These two phases exhibit fundamentally different execution characteristics. Prefill is compute-intensive and its cost is largely determined by input length, whereas decoding is memory-bandwidth-intensive and its total cost is only revealed incrementally during generation. Although phase-disaggregated architectures reduce interference between the two phases, they still suffer from significant intra-phase inefficiencies under heterogeneous workloads. In this work, we present PhaseServe, a phase-disaggregated LLM serving system built on phase-specialized scheduling. For the prefill phase, PhaseServe combines length-aware scheduling with capacity-aware batch construction to improve workload matching and reduce latency under heterogeneous prompt lengths. For decoding, it employs an MLFQ-based attained-service-aware scheduler with proactive KV-cache management to improve token-level responsiveness under variable output lengths. Experimental results show that, under the tested deployment setting, PhaseServe improves both time to first token (TTFT) and time per output token (TPOT) compared with representative baselines, achieving up to 9$\times$ speedup in TTFT and 2--2.5$\times$ speedup in TPOT.
+Large language model (LLM) serving must satisfy both time to first token (TTFT) and time per output token (TPOT) objectives under highly heterogeneous request lengths. Phase-disaggregated systems reduce direct interference by separating prefill and decode onto different instances, but the two phases remain coupled through context queues, bridge queues, first-token delay, decode backlog, KV-block availability, and swap feasibility. We present PhaseServe, a pressure-budgeted scheduler for phase-disaggregated LLM serving. PhaseServe introduces a Pressure-Budget Controller (PBC) that converts runtime pressure into typed budgets and bottleneck-regime ownership, Budgeted Prefill Shaping (BPS) that constructs known-size prefill batches under downstream pressure constraints, and KV-Feasible Active-Set Scheduling (KAS) that selects decode requests only after hard KV and swap feasibility gates. We implement PhaseServe on a DistServe-style disaggregated runtime and evaluate it on representative chat and long-context workloads with OPT and LLaMA-family models. The results show that PhaseServe improves both first-token and generation-stage latency over the DistServe-style baseline in the measured pressure windows, while component ablations isolate the complementary roles of PBC, BPS, and KAS.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -76,136 +76,66 @@ Large Language Models, inference systems, prefill--decode optimization, dynamic 
 
 
 \section{Introduction}
-\IEEEPARstart{L}{arge} Language Models (LLMs), such as LLaMA \cite{b1}, GPT \cite{b2}, and OPT \cite{b3}, are rapidly becoming the serving backend of interactive AI applications, including conversational assistants \cite{b11,b12}, code-generation systems \cite{humaneval,b14}, and enterprise copilots. Unlike conventional inference services, LLM serving must sustain high throughput while simultaneously meeting strict latency objectives under highly variable request mixes. In practice, users care about both \emph{time to first token} (TTFT), which determines how quickly the system starts responding, and \emph{time per output token} (TPOT), which determines how responsive generation remains once decoding begins. Meeting both targets efficiently is challenging because LLM inference is expensive in both computation and memory, and real workloads exhibit highly skewed input and output lengths.
+\IEEEPARstart{L}{arge} Language Models (LLMs), such as LLaMA \cite{b1}, GPT \cite{b2}, and OPT \cite{b3}, are rapidly becoming the serving backend of interactive AI applications, including conversational assistants \cite{b11,b12}, code assistants \cite{b14}, and enterprise copilots. Unlike conventional inference services, LLM serving must sustain high throughput while meeting latency objectives under highly variable request mixes. In practice, users care about both \emph{time to first token} (TTFT), which determines how quickly the system starts responding, and \emph{time per output token} (TPOT), which determines how responsive generation remains once decoding begins. Meeting both targets efficiently is difficult because LLM inference has two phases with different resource profiles and real workloads have highly skewed input and output lengths.
 
-Modern LLM serving systems have substantially improved performance through continuous batching, memory-efficient KV-cache management, and distributed execution \cite{orca,vllm,sarathi,b24,tensorrt,flexgen,alpaserve,distserve}. However, these systems still face a fundamental tension. Prefill and decode have very different execution characteristics: prefill processes the full prompt and is predominantly compute-intensive, whereas decode generates tokens iteratively and is typically constrained by memory traffic and token-level queuing delay. When the two phases are scheduled together, long-running prefills can delay latency-sensitive decode iterations, making it difficult to satisfy TTFT and TPOT simultaneously.
+Modern LLM serving systems have improved performance through continuous batching, memory-efficient KV-cache management, chunked prefill, and distributed execution \cite{orca,vllm,sarathi,tensorrt,flexgen,alpaserve}. These techniques are essential, but they still face the prefill--decode tension. Prefill processes the full prompt and is predominantly compute-intensive, whereas decode generates tokens iteratively and is typically constrained by memory traffic, KV-cache residency, and token-level queuing. When the two phases share the same serving instance, long prefills can delay latency-sensitive decode iterations, and aggressive decode batching can consume memory needed by newly admitted requests.
 
-Recent phase-disaggregated (PD) systems address this problem by separating prefill and decode onto different instances \cite{b5,b6,distserve}. This is an important architectural step: it removes direct interference between the two phases and enables phase-specific provisioning. However, phase disaggregation does \emph{not} eliminate all inefficiency. Instead, it exposes a new bottleneck that existing systems do not explicitly address: \emph{intra-phase scheduling inefficiency under heterogeneous workloads}. In particular, prefill requests exhibit highly skewed prompt lengths and therefore highly skewed execution costs, whereas decode requests have unknown and dynamically revealed output lengths, which lead to stragglers and inflated token-level latency.
+Phase-disaggregated serving systems address this direct interference by separating prefill and decode onto different instances \cite{b5,distserve,windserve,shuffleinfer}. This architectural split is an important step because it enables phase-specific provisioning and reduces co-location contention. Recent systems further explore dynamic dispatch, rescheduling, streaming, mixed-workload scheduling, and KV-cache transfer for serving resilience \cite{b6}. However, disaggregation does not remove cross-phase coupling; it changes its form. A prefill scheduler can still inject a burst of context-completed requests, KV footprint, and first-decode work into the bridge and decode side. A decode scheduler can still decide whether bridge-completed requests receive their first decode step promptly, whether resident requests keep KV locality, and whether swap pressure grows. We call this remaining bottleneck \emph{runtime pressure propagation}: scheduling actions in one phase alter the pressure seen by the other phase through bridge queues, first-token delay, decode backlog, KV-block scarcity, and swap feasibility.
 
-The key insight of this paper is that these two inefficiencies correspond to \emph{different scheduling regimes}. In prefill, the dominant cost of a request is largely determined by its prompt length and is therefore known before execution. Prefill is thus naturally a scheduling problem with \emph{known but heterogeneous job sizes}. In decode, the total service demand is not known a priori and only becomes visible as generation proceeds. Decode is therefore an iterative scheduling problem with \emph{unknown and dynamically evolving job sizes}. This asymmetry implies that a unified policy is fundamentally mismatched to PD serving. Efficient phase-disaggregated serving requires \emph{phase-specialized scheduling}: prefill should exploit size information to reduce head-of-line blocking and improve batching quality, while decode should use service-aware iterative scheduling to control stragglers and token-level latency.
+Pressure propagation makes independent phase-local policies insufficient. Prefill has useful size information before execution: prompt length is known and strongly predicts compute and KV footprint. This favors size-aware and budget-aware batch shaping, but a prefill policy that only maximizes local utilization may flood the downstream decode side. Decode has the opposite information structure: each iteration is small, but the final output length is unknown and only revealed online. This favors attained-service or fairness-aware scheduling, but a decode policy that ignores KV residency and swap feasibility can increase stalls or delay first-token progress. The core scheduling problem in a disaggregated runtime is therefore not only to pick a good local order within each phase, but to decide which phase-local action space should be expanded or constrained under the current pressure regime.
 
-Based on this insight, we present \textbf{PhaseServe}, a phase-disaggregated LLM serving system with coordinated, phase-specialized scheduling. PhaseServe combines a lightweight global controller for cross-phase routing and load balancing with two different local scheduling policies. On the prefill side, PhaseServe performs utility-aware batch construction that exploits known prompt costs to reduce head-of-line blocking while preserving high GPU utilization. On the decode side, PhaseServe performs service-aware iterative scheduling with KV-state-aware admission and proactive state management, enabling responsive handling of requests with unknown output lengths under explicit memory constraints. Together, these mechanisms turn phase disaggregation from a static architectural split into a coordinated serving framework that aligns scheduling policy with the information structure of each phase.
+We present \textbf{PhaseServe}, a pressure-budgeted phase scheduler for disaggregated LLM serving. PhaseServe keeps the DistServe-style split between prefill and decode, but replaces FCFS runtime scheduling with a coordinated control loop. The \emph{Pressure-Budget Controller} (PBC) observes context, bridge, first-token, decode, KV, and swap pressure, classifies the current bottleneck regime, and emits typed budgets. \emph{Budgeted Prefill Shaping} (BPS) uses these budgets to form known-size prefill batches that balance token fill, padding waste, block risk, and bounded progress. \emph{KV-Feasible Active-Set Scheduling} (KAS) uses the same budget object to select decode requests only after hard KV and swap feasibility gates, then applies attained-service, residency, age, and pressure-aware utility within the feasible set. Together, these components turn phase disaggregation from a static architectural split into an online pressure-budgeted scheduling method.
 
-We evaluate PhaseServe on representative dialogue and code-generation workloads using OPT models \cite{b3,sharegpt,humaneval}. Across a range of concurrency levels and workload mixes, PhaseServe consistently improves both TTFT and TPOT over representative unified and phase-disaggregated baselines. Under high concurrency, it achieves up to $9\times$ lower TTFT and up to $2.5\times$ lower TPOT.
+We evaluate PhaseServe on representative chat and long-context workloads with OPT and LLaMA-family models \cite{b1,b3,sharegpt,longbench}. The evaluation compares PhaseServe with DistServe-style phase-disaggregated scheduling on matched request traces and reports percentile-level TTFT and TPOT gains separately for each model, dataset, and request-rate window. This evaluation structure is important because prefill and decode pressure emerge in different operating regions; a single global speedup would obscure which bottleneck is being improved. Component ablations further show that PBC, BPS, and KAS contribute complementary benefits: PBC coordinates pressure ownership, BPS improves prefill-side first-token behavior, and KAS improves decode-side active-set selection under KV and swap constraints.
 
 In summary, this paper makes the following contributions:
 \begin{itemize}
-\item We identify \emph{intra-phase scheduling inefficiency} as a fundamental bottleneck of phase-disaggregated LLM serving and show that it arises from the mismatch between heterogeneous request distributions and uniform scheduling policies.
-\item We formulate a \emph{phase-specialized scheduling principle} for PD serving: prefill corresponds to scheduling with known job sizes, while decode corresponds to iterative scheduling with unknown and dynamically revealed job sizes.
-\item We design and implement \textbf{PhaseServe}, a coordinated serving system that integrates utility-aware prefill scheduling, service-aware decode scheduling, and KV-state-aware execution under a phase-disaggregated architecture.
-\item We show experimentally that PhaseServe substantially improves TTFT, TPOT, and overall serving efficiency across representative interactive workloads.
+\item We identify \emph{runtime pressure propagation} as a remaining bottleneck in phase-disaggregated LLM serving: prefill and decode are physically separated, but their scheduling actions remain coupled through context queues, bridge queues, first-token delay, decode backlog, KV-block scarcity, and swap feasibility.
+\item We formulate \emph{pressure-budgeted phase scheduling}, which converts runtime pressure into typed budgets and bottleneck-regime ownership before local prefill or decode scheduling decisions are made.
+\item We design and implement \textbf{PhaseServe} with three coupled components: PBC for pressure-to-budget control, BPS for budgeted known-size prefill shaping, and KAS for KV-feasible decode active-set shaping.
+\item We evaluate PhaseServe against a DistServe-style baseline and component ablations, showing that the full PBC/BPS/KAS design improves TTFT, TPOT, and service attainment in the measured pressure windows.
 \end{itemize}
 
-Artifact Availability. The PhaseServe implementation is publicly available at \texttt{https://github.com/Dreamer-HIT/PhaseServe}.
+Artifact Availability. The PhaseServe implementation is publicly available at \texttt{https://github.com/Dreamer-HIT/PhaseServe2}.
 
 \section{Background and Motivation}\label{background}
 
-This section motivates PhaseServe from a systems perspective. We first summarize the execution characteristics of generative LLM inference and explain why TTFT and TPOT are governed by different bottlenecks (Section~\ref{2.1}). We then discuss why existing optimizations, although important, are insufficient for heterogeneous phase-disaggregated serving (Section~\ref{2.2}). Finally, we present empirical evidence showing that the two phases exhibit distinct internal inefficiencies and should therefore be treated as different scheduling problems (Section~\ref{2.3}).
+\subsection{LLM Serving and Phase Disaggregation}
 
-\begin{figure}[t]
-    \centering
-    \subfloat[Prefill phase.\label{fig:moti1-prefill}]{%
-\begin{minipage}{0.48\linewidth}
+Decoder-only LLMs generate text in two sequential phases \cite{transformer,b1,b2,b3}. The \emph{prefill} phase processes the full input prompt, computes hidden states for the prompt tokens, materializes the initial KV cache, and produces the logits from which generation begins. Prefill therefore exposes substantial matrix-computation parallelism, and its cost is largely determined by the known prompt length. The \emph{decode} phase then generates tokens one iteration at a time. Each decode step performs relatively little new computation, but it must read and extend the accumulated KV cache, making decode sensitive to memory bandwidth, KV residency, and token-level queuing.
+
+This phase structure creates two latency objectives. TTFT measures how quickly a request reaches its first generated token, and is affected by prefill execution, prefill queueing, handoff delay, and the first decode step. TPOT measures the pace of subsequent token generation, and is affected by decode iteration latency, active-set selection, and KV-cache feasibility. Modern serving systems improve these objectives using continuous batching, paged KV-cache allocation, chunked prefill, and optimized kernels \cite{orca,vllm,tensorrt,sarathi,flashattention,flashattention2}. These techniques are essential, but they do not by themselves determine how runtime pressure should be assigned across the two phases.
+
+Phase-disaggregated serving separates prefill and decode onto different instances \cite{b5,distserve,windserve,shuffleinfer}. This architecture is important because it removes direct co-location interference and enables phase-specific resource provisioning. DistServe, for example, disaggregates the two phases and co-optimizes placement and parallelism for TTFT and TPOT constraints \cite{distserve}. WindServe and ShuffleInfer further explore dynamic scheduling and mixed-workload dispatch in disaggregated serving \cite{windserve,shuffleinfer}, while related work also studies KV-cache streaming and transfer for serving resilience \cite{b6}. PhaseServe starts from this architectural progress, but focuses on the runtime scheduling problem that remains after the phases have been separated.
+
+\subsection{Runtime Pressure Propagation}
+
+Phase disaggregation removes one source of interference, but it does not make the phases independent. A prefill scheduler still decides how many prompt tokens and KV blocks are injected into the downstream path. After prefill completes, requests must cross a bridge or handoff queue, receive their first decode step, reserve append blocks, and remain feasible under decode-side KV and swap constraints. A decode scheduler, in turn, decides which bridge-completed requests are admitted, whether resident requests keep locality, and whether near-completion requests release KV blocks soon enough to unblock new first-token progress.
+
+We call this coupling \emph{runtime pressure propagation}. Pressure is not a single queue length. It may appear as context queueing, bridge waiting, first-token debt, decode backlog, GPU-block scarcity, swap infeasibility, or long-wait progress debt. These pressure components interact. A locally efficient prefill batch can finish many contexts at once, but the resulting burst can increase bridge pressure and first-decode contention. A decode policy that aggressively protects low attained-service requests can improve some token latencies, but may delay first-decode admission or choose requests that are expensive to make KV-feasible. Conversely, a policy that only drains resident requests may preserve locality while allowing bridge pressure and TTFT tails to grow.
+
+This propagation makes phase-local scheduling insufficient. A prefill-only policy can exploit known prompt lengths, but it cannot know whether the downstream decode side should accept more KV footprint. A decode-only policy can use attained service or residency, but it cannot decide whether the system should instead reduce prefill injection. A binary backpressure rule can stop admission under high load, but it does not say \emph{which} action space should be tightened: prefill token budget, block margin, bridge admission, decode scan, swap budget, or decode utility. A scheduler for phase-disaggregated serving therefore needs a typed control interface between observed pressure and phase-local action spaces.
+
+\subsection{Empirical Motivation}
+
+Figure~\ref{fig:pressure-motivation} shows this pressure propagation using the same request traces used by our end-to-end evaluation. Panels (a), (b), (d), and (e) plot a DistServe-style baseline to motivate the problem rather than to claim PhaseServe's benefit before the evaluation. Panels (c) and (f) report pressure counters and budget movement from the instrumented runtime on the same traces; these panels show that hard feasibility and budget response are separate signals from ordinary queue latency.
+
+\begin{figure*}[t]
 \centering
-\includegraphics[width=\linewidth]{prefill.pdf}
-\end{minipage}
-}
-    \hfill
-    \subfloat[Decode phase.\label{fig:moti1-decode}]{%
-\begin{minipage}{0.48\linewidth}
-\centering
-\includegraphics[width=\linewidth]{decode.pdf}
-\end{minipage}
-}
-    \caption{Throughput of the two inference phases under different batch sizes and sequence lengths (LLaMA-3.1 8B on a single RTX 3090 GPU). Prefill saturates once prompt processing reaches the device's compute limit, whereas decode continues to scale with batch size until memory bandwidth becomes the bottleneck.}
-    \label{fig:moti1}
-\end{figure}
+\includegraphics[width=\textwidth]{../results/figures/motivation/background_pressure_motivation.pdf}
+\caption{Runtime pressure propagation and typed pressure counters. Panels (a) and (b) show tail first-token and decode-token pressure in a DistServe-style phase-disaggregated baseline as offered load enters a pressure region across chat and long-context workloads. Panel (c) shows normalized hard-feasibility pressure observed by the instrumented runtime on the same traces. Panels (d) and (e) decompose median baseline queue components for representative chat and long-context settings. Panel (f) shows how the prefill-token budget and decode utility intensity move under the long-context pressure regime. Panels (c) and (f) are diagnostic counters rather than a performance comparison. Results are averaged over two random seeds.}
+\label{fig:pressure-motivation}
+\end{figure*}
 
-\subsection{Generative LLM Inference}\label{2.1}
+The baseline exhibits three patterns. First, TTFT tail latency grows rapidly once the request rate enters a pressure region. This growth is not only prefill execution time; it is also queueing and handoff delay before the first decode step. Second, TPOT tail latency rises in a different shape, indicating that decode-side pressure is governed by token iteration, active-set contention, and memory feasibility rather than by the same bottleneck as TTFT. Third, the queue breakdown shows that pressure can move across the runtime path: context waiting grows as prefill becomes saturated, bridge waiting appears when completed contexts cannot be admitted smoothly to decode, and decode waiting remains part of the end-to-end path. The dominant queue component depends on workload shape: LongBench 4K concentrates typical waiting in the context queue, whereas ShareGPT exposes a stronger bridge interaction. The diagnostic counters further show that hard feasibility pressure and budget movement are not reducible to one latency curve: the long-context trace triggers stronger hard-pressure counters and a different prefill/decode budget response than the chat traces.
 
-Decoder-only LLMs \cite{b1,b2,b3,transformer} generate text autoregressively. From a systems perspective, inference naturally decomposes into two sequential phases: prefill and decode.
+These observations do not imply that one fixed policy should always prioritize prefill or always prioritize decode. They imply that the scheduler must identify the current pressure regime and expose a compatible feasible set to each phase. When first-token or bridge pressure dominates, the system should protect bounded prefill progress and first-decode admission without violating hard memory constraints. When decode or swap pressure dominates, the decode active set should be shaped by KV and swap feasibility before soft priority. When several components are high, the scheduler needs an explicit conflict order so that local utility cannot override physical feasibility or bounded progress.
 
-\textbf{Prefill.}
-In the prefill phase, the model processes the entire input prompt, computes hidden states for all input tokens, constructs the initial KV cache, and produces the first output token. Since all prompt tokens are processed together across Transformer layers, prefill exposes substantial matrix-computation parallelism and is predominantly compute-intensive. Its dominant cost is strongly correlated with input length, which makes prefill cost largely predictable before execution.
+\subsection{Design Requirements}
 
-\textbf{Decode.}
-In the decode phase, the model generates one token per iteration. Although each step introduces only one new token, attention must read the accumulated KV cache from all prior tokens. As a result, decode performs relatively little new computation per step but incurs substantial memory traffic, especially under concurrency. Decode is therefore typically more sensitive to memory bandwidth and token-level queuing delay than raw compute throughput.
+The motivation above leads to four requirements for a phase-disaggregated scheduler. First, it must observe typed pressure rather than a single overload signal. Bridge pressure, first-token debt, decode backlog, KV scarcity, and swap feasibility have different causes and require different responses. Second, it must translate pressure into typed budgets that constrain phase-local action spaces. The response to high pressure may be to shrink prefill token injection, reserve more block margin, reduce swap exposure, alter decode scan depth, or change decode utility intensity. Third, it must separate hard feasibility from soft priority. A request that is attractive under a fairness or attained-service score is still a bad immediate choice if it cannot reserve KV blocks or would exceed the swap budget. Fourth, it must preserve bounded progress so that old or repeatedly deferred requests do not starve, while still respecting physical feasibility.
 
-These differences imply that TTFT and TPOT are governed by different resource bottlenecks. TTFT is dominated by prefill execution and prefill-side queueing delay, whereas TPOT is dominated by decode-side iteration latency and KV-cache pressure.
-
-Figure~\ref{fig:moti1} illustrates this asymmetry empirically. As prompt length grows, prefill throughput eventually plateaus, indicating that the device has entered a compute-saturated regime. In contrast, decode throughput continues to improve as batch size increases until memory bandwidth becomes the limiting factor. This distinction is central to our design: prefill and decode are not merely two steps of the same pipeline, but two workload classes with different bottlenecks and different scheduling signals.
-
-\subsection{Existing Optimizations and Their Limits}\label{2.2}
-
-Modern LLM serving systems rely on batching, memory management, and phase separation to improve performance. These techniques are essential, but none of them fully address the scheduling mismatch exposed by heterogeneous phase-disaggregated workloads.
-
-\textbf{Batching and continuous scheduling.}
-Batching amortizes model execution cost across requests and is therefore a primary mechanism for improving throughput. However, naive static batching is ineffective for LLMs because input and output lengths vary widely, causing severe straggler effects. Systems such as Orca \cite{orca}, vLLM \cite{vllm}, and TensorRT-LLM \cite{tensorrt} therefore adopt \emph{continuous batching}, allowing requests to join and leave a running batch dynamically. While this substantially improves utilization, it still does not resolve the fundamental mismatch between prefill and decode when both are scheduled within the same domain.
-
-\textbf{KV-cache memory management.}
-The KV cache grows with sequence length and can occupy a large fraction of GPU memory, directly limiting concurrency. vLLM \cite{vllm} addresses this issue with PagedAttention, which allocates KV state incrementally in fixed-size blocks rather than reserving large contiguous buffers upfront. This design improves memory efficiency and batching capacity. Nevertheless, better KV allocation alone does not determine which requests should be served first, nor does it address the phase-specific nature of prefill and decode scheduling.
-
-\textbf{Phase-disaggregated architectures.}
-Recent systems such as Splitwise \cite{b5}, D\'ej\`aVu \cite{b6}, and DistServe \cite{distserve} separate prefill and decode onto different instances. This removes direct phase interference and enables phase-specific resource provisioning. However, once the two phases are separated, each phase still faces its own internal scheduling bottleneck. Prefill remains vulnerable to batching inefficiency caused by highly skewed prompt lengths, while decode remains vulnerable to straggler effects caused by unknown generation lengths.
-
-The limitation of existing approaches is therefore not the absence of batching, memory optimization, or disaggregation per se. Rather, it is the absence of a \emph{phase-specialized scheduling framework} that explicitly matches the scheduling policy to the information structure of each phase.
-
-\subsection{Problems and Opportunities}\label{2.3}
-
-We now empirically characterize the inefficiencies that persist even after phase disaggregation. Our findings show that the two phases exhibit different failure modes and should be treated as different scheduling problems.
-
-\begin{figure}[t]
-    \centering
-    \subfloat[Prompt length distribution in ShareGPT.\label{fig:share_prefill_tongji}]{%
-\begin{minipage}{0.48\linewidth}
-\centering
-\includegraphics[width=\linewidth]{share_prefill_tongji.pdf}
-\end{minipage}
-}
-    \hfill
-    \subfloat[Prefill latency under mixed prompt lengths.\label{fig:problem_prefill}]{%
-\begin{minipage}{0.48\linewidth}
-\centering
-\includegraphics[width=\linewidth]{problem_prefill.pdf}
-\end{minipage}
-}
-    \caption{Empirical evidence of prefill-side heterogeneity. Real workloads exhibit highly skewed prompt lengths, and mixing short and long prompts in the same batch significantly inflates prefill latency.}
-    \label{fig:prefill-inter}
-\end{figure}
-
-\noindent\textbf{Observation 1: Prefill is a scheduling problem with known but highly skewed job sizes.}
-Prompt lengths in real workloads vary substantially, and this variation directly determines prefill cost. Figure~\ref{fig:share_prefill_tongji} shows the prompt-length distribution of ShareGPT, which is highly skewed: short prompts are common, but long prompts remain frequent enough to create substantial heterogeneity. This workload shape implies that prefill naturally corresponds to a scheduling setting in which job sizes are largely known but highly imbalanced.
-
-We further measure the impact of mixing short and long prompts in the same prefill batch. Figure~\ref{fig:problem_prefill} shows that when only a fraction of long prompts is introduced into an otherwise short-prompt batch, overall prefill latency increases sharply. The reason is that prefill execution time is dominated by the longest sequence in the batch. Shorter requests are therefore forced to wait behind longer ones, inflating TTFT and reducing effective compute utilization. Importantly, this inefficiency is not eliminated by continuous batching or by phase disaggregation itself, because it is rooted in the mismatch between skewed prompt costs and batch-level execution semantics.
-
-\begin{figure}[t]
-    \centering
-    \subfloat[Decode latency under mixed output lengths.\label{fig:decode-time}]{%
-\begin{minipage}{0.48\linewidth}
-\centering
-\includegraphics[width=\linewidth]{decode-time.pdf}
-\end{minipage}
-}
-    \hfill
-    \subfloat[Decode throughput under mixed output lengths.\label{fig:decode_throughput}]{%
-\begin{minipage}{0.48\linewidth}
-\centering
-\includegraphics[width=\linewidth]{decode_throughput.pdf}
-\end{minipage}
-}
-    \caption{Empirical evidence of decode-side heterogeneity. Long generations remain in the system for many more iterations, causing straggler effects that increase latency and reduce throughput for short requests.}
-    \label{fig:decode-inter}
-\end{figure}
-
-\noindent\textbf{Observation 2: Decode is a scheduling problem with unknown and dynamically revealed job sizes.}
-Decode exhibits a fundamentally different structure. While the cost of each individual iteration is relatively stable, the total number of iterations required by a request is unknown a priori and varies significantly across requests. Figure~\ref{fig:decode-inter} shows that mixing short and long generations in the same decode workload significantly increases latency and reduces throughput. Long-running requests remain active for many more iterations, thereby occupying decode slots and delaying the completion of short requests.
-
-This behavior is a classic straggler phenomenon. Unlike prefill, however, it cannot be effectively addressed by simple size-based grouping or static batching, because the total generation length is not known in advance. Instead, the scheduler must make decisions online based on attained service and evolving request state.
-
-\noindent\textbf{Design implication.}
-These observations reveal that the bottlenecks of phase-disaggregated serving are not uniform. Prefill corresponds to a scheduling regime with known job sizes and highly skewed cost distribution, suggesting size-aware batching and bounded-wait prioritization. Decode corresponds to an iterative scheduling regime with unknown job sizes, suggesting service-aware scheduling with explicit fairness and state management. Therefore, an efficient PD serving system should not apply a single generic policy to both phases. Instead, it should explicitly align each phase with the scheduling signals and control mechanisms appropriate to its workload structure.
-
-This insight motivates the design of PhaseServe. Rather than treating phase disaggregation as the end of optimization, PhaseServe treats it as the beginning of a new scheduling regime: once prefill and decode are separated, each phase should be scheduled according to its own information structure, bottleneck, and latency objective.
+PhaseServe is designed around these requirements. PBC provides the pressure-to-budget control contract, BPS executes known-size prefill shaping under prefill token and block budgets, and KAS executes KV-feasible decode active-set shaping under scan, swap, bridge, and utility budgets. The next section describes this design.
 
 
 
@@ -228,606 +158,322 @@ This insight motivates the design of PhaseServe. Rather than treating phase disa
 
 \subsection{Overview}
 
-PhaseServe is a phase-disaggregated LLM serving system that targets \emph{SLO-constrained goodput}: it seeks to maximize the sustainable request rate while satisfying both TTFT and TPOT targets for the vast majority of requests. The design is motivated by a simple but important observation: after prefill and decode are disaggregated, the main bottlenecks no longer come only from direct phase interference, but also from \emph{intra-phase heterogeneity} and \emph{cross-phase imbalance}. Prefill requests have known but highly heterogeneous execution costs before execution, whereas decode requests reveal their total service demand only incrementally as tokens are generated. As a result, the two phases require fundamentally different local scheduling policies, and the system as a whole requires explicit cross-phase control.
+PhaseServe is a pressure-budgeted phase scheduler for phase-disaggregated LLM serving. It assumes the same high-level runtime split as DistServe: requests first execute prefill on a prefill instance, then enter a bridge or handoff path before iterative generation on a decode instance. PhaseServe does not replace cluster-level placement, model parallelism, or KV-cache architecture. Instead, it addresses the runtime control problem left after disaggregation: prefill decisions can still inject bridge, decode, KV, and swap pressure downstream, and decode-side decisions can still delay first-token progress upstream.
 
-\begin{equation}
-\max \ \text{Goodput}
-\qquad
-\text{s.t.}\quad
-\text{TTFT}_{p90}\le \tau_{\text{TTFT}},\;
-\text{TPOT}_{p90}\le \tau_{\text{TPOT}}.
-\label{eq:global_obj}
-\end{equation}
+The central design principle is to convert runtime pressure into typed budgets before making local scheduling decisions. PhaseServe contains three components. The \emph{Pressure-Budget Controller} (PBC) observes context, bridge, first-token, decode, KV, and swap pressure, classifies the current bottleneck regime, and emits a structured budget object. \emph{Budgeted Prefill Shaping} (BPS) consumes this budget to shape known-size prefill batches. \emph{KV-Feasible Active-Set Scheduling} (KAS) consumes the same budget to select decode requests under hard memory and swap feasibility constraints.
 
-Figure~\ref{fig:overview} shows the architecture of PhaseServe. The system consists of four major components: a \emph{global phase controller}, a pool of \emph{prefill engines}, a pool of \emph{decode engines}, and a \emph{KV-state manager}. Requests first enter the global ingress queue and are routed to a prefill engine. After prefill completes and the initial KV state is materialized, the request is handed off to a decode engine for autoregressive generation. Throughout execution, the KV-state manager tracks the residency and transfer status of request state and exposes this information to both the global controller and local schedulers.
-
-PhaseServe is organized as a hierarchical control system. The \emph{global phase controller} performs coarse-grained decisions on routing, phase balancing, and control-epoch adaptation. Each \emph{prefill engine} performs utility-aware batch construction for known-size jobs, and each \emph{decode engine} performs service-aware iterative scheduling for unknown-size jobs under explicit KV and prefetch budgets. This organization separates long-timescale control from short-timescale dispatch, allowing PhaseServe to react to both dynamic workload composition and iteration-level service variability.
-
-\begin{figure}[t]
-\centering
-\fbox{
-\parbox{0.95\columnwidth}{
-\centering
-\vspace{0.4em}
-\textbf{Placeholder for System Overview Figure}\\[0.4em]
-\footnotesize
-Recommended drawing: a full pipeline with four blocks:
-\textit{Global Phase Controller} $\rightarrow$ \textit{Prefill Engines} $\rightarrow$ \textit{KV-State Manager} $\rightarrow$ \textit{Decode Engines}.\\
-Show request arrival at the controller, routing to one prefill engine, prefill completion and KV registration, topology-aware handoff to one decode engine, and iterative token generation.\\
-Add feedback arrows from prefill/decode pools back to the controller labeled:
-\textit{prefill backlog}, \textit{decode backlog}, \textit{TTFT/TPOT miss rate}, and \textit{KV-transfer pressure}.\\
-Inside the controller, annotate four functions:
-\textit{load estimation}, \textit{routing}, \textit{phase-balance tuning}, and \textit{policy adaptation}.
-\vspace{0.4em}
-}
-}
-\caption{Architecture of PhaseServe. A global phase controller performs routing and closed-loop phase balancing. Prefill engines use utility-aware batch construction for known-size requests. Decode engines use service-aware iterative scheduling under KV-state control. The KV-state manager explicitly tracks residency, prefetch, eviction, and handoff.}
-\label{fig:overview}
-\end{figure}
-
-\subsection{Global Phase Controller}
-
-The global phase controller is the control plane of PhaseServe. It maintains a lightweight but continuously updated view of system state, including the pending workload of each prefill engine, the active decode backlog of each decode engine, KV-transfer pressure, and observed SLO violations. The controller is invoked on request arrival and at every control epoch.
-
-\subsubsection{Request Characterization and Cost Proxies}
-
-For each request $r$, the controller extracts a compact descriptor
-\[
-\phi(r)=\langle l_{\text{in}}, \hat{l}_{\text{out}}, s, c \rangle,
-\]
-where $l_{\text{in}}$ is the input length, $\hat{l}_{\text{out}}$ is an optional coarse output-length class, $s$ denotes the request or SLO class, and $c$ denotes the current context length once the request enters decode.
-
-PhaseServe does not require highly accurate latency prediction. Instead, it relies on robust phase-specific cost proxies that are sufficient for online control. For prefill, the request cost is approximated as
-\begin{equation}
-\hat{C}_{\text{prefill}}(r)=a_{1}l_{\text{in}} + a_{2}l_{\text{in}}^{2},
-\label{eq:prefill_cost}
-\end{equation}
-which captures the dominant scaling behavior of prompt processing with respect to input length. For decode, the instantaneous cost is approximated as
-\begin{equation}
-\hat{C}_{\text{decode}}(r)=b_{1}c + b_{2}m_{\text{kv}}(r),
-\label{eq:decode_cost}
-\end{equation}
-where $m_{\text{kv}}(r)$ denotes the KV-cache footprint of request $r$. This proxy reflects both context growth and decode-side memory pressure.
-
-\subsubsection{Phase-Specific Load Estimation}
-
-Using these proxies, the controller maintains phase-specific load estimates. For a prefill engine $e_p$, the estimated load is
-\begin{equation}
-\hat{L}_{p}(e_p)=\sum_{r \in Q_{p}(e_p)} \hat{C}_{\text{prefill}}(r),
-\end{equation}
-where $Q_{p}(e_p)$ includes both queued and currently executing prefill requests. For a decode engine $e_d$, the estimated load is
-\begin{equation}
-\hat{L}_{d}(e_d)=\sum_{r \in A(e_d)} \hat{C}_{\text{decode}}(r),
-\end{equation}
-where $A(e_d)$ is the active decode set.
-
-This separation is important. Prefill pressure is dominated by known prompt-processing cost, whereas decode pressure is dominated by iterative context growth, KV footprint, and activation cost. A single aggregated load signal would obscure this asymmetry and lead to unstable routing.
-
-\subsubsection{Routing and Topology-Aware Handoff}
-
-Upon arrival, a request is routed to the prefill engine minimizing
-\begin{equation}
-\text{Score}_{p}(e_p,r)=w_{1}\hat{L}_{p}(e_p)+w_{2}\hat{Q}_{p}(e_p)+w_{3}\text{SLOPenalty}(e_p,r),
-\label{eq:prefill_route}
-\end{equation}
-where $\hat{Q}_{p}(e_p)$ denotes queueing pressure and $\text{SLOPenalty}(e_p,r)$ estimates the TTFT risk for request $r$ on engine $e_p$.
-
-After prefill completes, the request is forwarded to the decode engine minimizing
-\begin{equation}
-\text{Score}_{d}(e_d,r)=u_{1}\hat{L}_{d}(e_d)+u_{2}T_{\text{kv}}(e_p,e_d,r)+u_{3}\text{NetCost}(e_p,e_d),
-\label{eq:decode_route}
-\end{equation}
-where $T_{\text{kv}}(e_p,e_d,r)$ estimates the KV-state handoff cost from prefill engine $e_p$ to decode engine $e_d$, and $\text{NetCost}(e_p,e_d)$ captures topology-dependent communication cost. This formulation makes routing explicitly state-aware: decode placement is treated as a joint scheduling-and-handoff decision rather than a pure queue-balancing problem.
-
-\subsubsection{Closed-Loop Phase Balancing}
-
-Phase disaggregation removes direct prefill--decode interference, but also introduces a producer--consumer relation between the two phases. Under realistic workloads, prefill may over-produce requests relative to decode capacity, or decode may be underutilized because prefill has become the bottleneck. To address this issue, the controller operates in repeated control epochs. At the end of each epoch, it collects four signals:
-\begin{itemize}
-    \item prefill backlog growth,
-    \item decode backlog growth,
-    \item TTFT/TPOT SLO miss rate,
-    \item KV-transfer saturation.
-\end{itemize}
-
-Based on these signals, the controller updates three classes of parameters:
-\begin{itemize}
-    \item \textbf{prefill aggressiveness}, including the waiting-window size and target prefill workload;
-    \item \textbf{decode aggressiveness}, including queue quanta, starvation threshold, and admission conservativeness;
-    \item \textbf{cross-phase balance}, including routing weights and the effective prefill/decode capacity ratio.
-\end{itemize}
-
-In effect, the controller acts as a slow-timescale optimizer layered above the local schedulers. Local engines react to instantaneous request heterogeneity, while the controller corrects structural imbalance across epochs. This separation keeps the control plane lightweight while still allowing the system to adapt to non-stationary workloads.
-
-\subsection{Prefill Engine}
-
-The prefill engine executes prompt processing and first-token generation. Since the dominant cost of a prefill request is known before execution, PhaseServe models prefill scheduling as an online problem with known but highly heterogeneous job sizes. The engine consists of two tightly coupled mechanisms: \emph{windowed candidate selection} and \emph{utility-aware batch construction}.
-
-\subsubsection{Windowed Candidate Selection}
-
-Instead of greedily batching every newly arrived request, the prefill engine collects requests within a bounded waiting window $W_p$. Let $\mathcal{R}_p$ denote the set of pending requests in the local queue. At each dispatch round, the engine forms a candidate set
-\begin{equation}
-\mathcal{C}_{p}=\{r \in \mathcal{R}_{p} \mid \text{wait}(r)\le W_{p}\}\cup\{r_{\text{oldest}}\},
-\label{eq:candidate_prefill}
-\end{equation}
-where $r_{\text{oldest}}$ is always included to prevent starvation. This design avoids the pathological behavior of purely greedy batching while still bounding request waiting time.
-
-\subsubsection{Utility-Aware Batch Construction}
-
-Within $\mathcal{C}_{p}$, the engine constructs the next prefill batch by maximizing a phase-specific utility:
-\begin{equation}
-U_{p}(B)=\sum_{r\in B}\omega(r)-\lambda_{1}\text{PadCost}(B)-\lambda_{2}\text{LoadGap}(B)-\lambda_{3}\text{MemRisk}(B),
-\label{eq:prefill_utility}
-\end{equation}
-where $\omega(r)$ is a request weight that increases with waiting age and decreases with estimated cost, $\text{PadCost}(B)$ measures inefficiency caused by batching mismatched prompt lengths together, $\text{LoadGap}(B)$ measures the distance between the estimated workload of batch $B$ and the empirically profiled GPU saturation region, and $\text{MemRisk}(B)$ penalizes configurations likely to trigger memory pressure.
-
-Operationally, the engine first ranks candidates using a score that combines estimated cost and age, then greedily builds a memory-feasible batch, and finally performs local refinement to improve workload matching and reduce padding waste. Compared with fixed-count batching, this formulation directly optimizes the latency--utilization tradeoff: short requests are favored in the common case, but memory constraints, batching efficiency, and fairness are all considered simultaneously.
-
-\subsubsection{Bounded-Wait Dispatch}
-
-Pure size-based policies can delay long prompts under sustained load. PhaseServe therefore introduces a dispatch timeout $\tau_p$. If the oldest request in the candidate set has waited longer than $\tau_p$, the engine immediately dispatches the best feasible batch even if the utility is slightly below the preferred saturation target. This yields a bounded-wait implementation of size-aware scheduling: short requests are prioritized when possible, while long requests are protected from indefinite delay.
-
-\noindent\textbf{Algorithm Implementation.}
-Algorithm~\ref{alg:prefill-scheduler} implements the prefill-side candidate selection and utility-aware batch construction.
-
-\begin{algorithm}[t]
-\small
-\caption{Utility-Aware Prefill Scheduling}
-\label{alg:prefill-scheduler}
-\begin{algorithmic}[1]
-\REQUIRE Waiting window $W_p$, candidate set $\mathcal{R}$, memory budget $M_p$, target workload $L_m$, dispatch timeout $\tau_p$
-\ENSURE Next prefill batch $B^\star$
-
-\STATE $B^\star \leftarrow \emptyset$
-\STATE $\mathcal{C} \leftarrow \{r \mid r \in \mathcal{R},\; \text{wait}(r)\le W_p \text{ or } r \text{ is oldest}\}$
-
-\FORALL{$r \in \mathcal{C}$}
-    \STATE estimate $c_r \leftarrow \hat{C}_{\text{prefill}}(r)$
-    \STATE estimate $m_r \leftarrow \hat{M}_{\text{prefill}}(r)$
-    \STATE compute score $s_r \leftarrow f(c_r,\text{wait}(r),\text{age}(r))$
-\ENDFOR
-
-\STATE Sort $\mathcal{C}$ by decreasing $s_r$
-\STATE $B \leftarrow \emptyset$
-
-\FORALL{$r \in \mathcal{C}$}
-    \IF{$\hat{M}(B \cup \{r\}) \le M_p$}
-        \STATE tentatively add $r$ to $B$
-        \IF{$U_p(B \cup \{r\}) \ge U_p(B)$}
-            \STATE $B \leftarrow B \cup \{r\}$
-        \ENDIF
-    \ENDIF
-\ENDFOR
-
-\STATE Apply local refinement on $B$ to reduce padding waste and improve load matching
-\IF{$B = \emptyset$}
-    \STATE $B \leftarrow \{\text{oldest request}\}$
-\ENDIF
-
-\IF{$\text{oldestWait}(\mathcal{C}) \ge \tau_p$}
-    \STATE $B^\star \leftarrow B$
-\ELSIF{$\hat{L}(B)\ge L_m$}
-    \STATE $B^\star \leftarrow B$
-\ENDIF
-
-\STATE \textbf{return} $B^\star$
-\end{algorithmic}
-\end{algorithm}
-
-\begin{figure}[t]
-\centering
-\fbox{
-\parbox{0.95\columnwidth}{
-\centering
-\vspace{0.4em}
-\textbf{Placeholder for Prefill Scheduling Figure}\\[0.4em]
-\footnotesize
-Recommended drawing: compare \textit{naive FCFS/fixed-count batching} with \textit{PhaseServe prefill scheduling}.\\
-Use a small set of requests with highly different prompt lengths.\\
-Top: naive batching places short prompts behind one long prompt and creates a poorly matched batch.\\
-Bottom: PhaseServe first forms a candidate window, then builds one or two utility-aware batches whose workload is close to the GPU saturation region.\\
-Annotate two benefits: reduced head-of-line blocking and improved workload matching.
-\vspace{0.4em}
-}
-}
-\caption{Illustrative example of prefill scheduling under heterogeneous prompt lengths. Compared with naive batching, PhaseServe forms utility-aware batches that better match GPU saturation while reducing head-of-line blocking for short requests.}
-\label{fig:prefill}
-\end{figure}
-
-\subsection{Decode Engine}
-
-The decode engine performs iterative token generation and directly determines TPOT. Unlike prefill, decode requests do not reveal their total service demand in advance. PhaseServe therefore models decode scheduling as an iterative service-allocation problem with unknown job sizes and explicit memory constraints. The engine combines a \emph{service-aware priority scheduler} with a \emph{KV-state-aware admission mechanism}.
-
-\subsubsection{Service-Aware Priority Model}
-
-Each decode request $r$ maintains a state tuple
-\[
-\psi(r)=\langle a(r), s(r), q(r), \delta(r) \rangle,
-\]
-where $a(r)$ is the waiting age, $s(r)$ is the attained service measured in decode iterations, $q(r)$ is the current priority level, and $\delta(r)$ is the TPOT slack relative to the target SLO.
-
-PhaseServe computes a dynamic urgency score
-\begin{equation}
-P(r)=\beta_{1}\frac{1}{1+s(r)}+\beta_{2}a(r)+\beta_{3}\delta(r)-\beta_{4}\text{PrefetchCost}(r).
-\label{eq:decode_priority}
-\end{equation}
-This score favors lightly served requests, gradually raises the priority of starving requests, accelerates SLO-critical requests, and discounts requests whose immediate activation cost is too high. In this way, PhaseServe approximates attained-service-aware scheduling without requiring knowledge of the remaining output length.
-
-\subsubsection{Hierarchical Queue Organization}
-
-To keep scheduling overhead manageable, the priority model is implemented using a hierarchy of queues derived from MLFQ. Newly admitted decode requests enter the highest-priority queue, and long-running requests are gradually demoted as they accumulate service. However, queue transitions are not determined solely by quantum depletion. They additionally depend on starvation age, SLO slack, and KV activation readiness. As a result, the queue hierarchy acts as a practical approximation to least-attained-service scheduling rather than a blind OS-style time-sharing policy.
-
-Let the decode scheduler maintain $n$ queues $\{Q_1,Q_2,\dots,Q_n\}$, where $Q_1$ has the highest priority. The corresponding quanta satisfy
-\begin{equation}
-\tau_1 < \tau_2 < \cdots < \tau_n,
-\qquad
-\tau_{i+1}=2\tau_i.
-\label{eq:decode_quanta}
-\end{equation}
-This exponential structure gives newly arrived or lightly served requests fine-grained responsiveness while amortizing scheduling overhead for long-running requests.
-
-\subsubsection{Memory-Aware Batch Admission}
-
-At each iteration, the decode engine first ranks ready requests by $P(r)$, then admits the next batch subject to memory and prefetch constraints. A request can be admitted only if
-\begin{equation}
-\texttt{CanAdmit}(r,B)=
-\bigl[m_{\text{kv}}(B\cup \{r\}) \le M_d\bigr]
-\land
-\bigl[p(B\cup \{r\}) \le P_d\bigr]
-\land
-\bigl[t(B\cup \{r\}) \le T_{\max}\bigr],
-\label{eq:can_admit}
-\end{equation}
-where $M_d$ is the available KV budget, $P_d$ is the prefetch bandwidth budget for the current iteration, and $T_{\max}$ is the maximum runtime token budget supported by the engine. This design ensures that a theoretically urgent request is admitted only if its KV state can be activated without destabilizing the current iteration batch.
-
-\subsubsection{Iteration Execution and Bounded Starvation}
-
-Once a batch is admitted, the engine executes exactly one decode iteration for each selected request. After the iteration, the engine updates attained service, queue level, TPOT slack, and completion status. Finished requests release their KV state immediately. Requests that exceed their local quantum or become non-urgent are demoted. Requests whose starvation timer exceeds a threshold $\alpha$ are promoted. By making decisions only at iteration boundaries, PhaseServe preserves responsiveness while keeping scheduling overhead practical.
-
-\noindent\textbf{Algorithm Implementation.}
-Algorithm~\ref{alg:decoding-schedule} implements the decode-side service-aware scheduling and KV-state-aware admission policy.
-
-\begin{algorithm}[t]
-\small
-\caption{Service-Aware Decode Scheduling}
-\label{alg:decoding-schedule}
-\begin{algorithmic}[1]
-\REQUIRE Incoming decode jobs $J_{\text{in}}$, ready set $\mathcal{R}$, priority queues $Q_1,\dots,Q_n$, KV budget $M_d$, prefetch budget $P_d$, max batch tokens $T_{\max}$, starvation threshold $\alpha$
-\ENSURE Next decode batch $B^\star$
-
-\STATE $B^\star \leftarrow \emptyset$
-
-\FORALL{$job \in J_{\text{in}}$}
-    \STATE initialize $s(job)\leftarrow 0$, $a(job)\leftarrow 0$
-    \STATE mark KV state as \texttt{resident}, \texttt{staged}, \texttt{prefetching}, or \texttt{remote}
-    \STATE place $job$ into the highest-priority queue $Q_1$
-\ENDFOR
-
-\FORALL{$job \in \mathcal{R}$}
-    \STATE update $a(job)$, $s(job)$, and TPOT slack $\delta(job)$
-    \STATE compute $P(job)$ according to Eq.~(\ref{eq:decode_priority})
-    \STATE adjust queue level or in-queue order according to $P(job)$
-    \IF{$a(job)\ge \alpha$}
-        \STATE promote $job$ to $Q_1$
-    \ENDIF
-\ENDFOR
-
-\STATE $\mathcal{C} \leftarrow$ jobs ordered by priority across $Q_1,\dots,Q_n$
-\FORALL{$job \in \mathcal{C}$}
-    \IF{$\texttt{CanAdmit}(job,B^\star)$}
-        \IF{$job$ is not \texttt{resident}}
-            \STATE issue prefetch for $job$
-        \ENDIF
-        \STATE $B^\star \leftarrow B^\star \cup \{job\}$
-    \ENDIF
-\ENDFOR
-
-\FORALL{$job \in B^\star$}
-    \STATE execute one token step for $job$
-    \STATE $s(job)\leftarrow s(job)+1$
-    \IF{$job$ finishes}
-        \STATE release KV state and remove $job$
-    \ELSIF{$job$ exhausts its local quantum}
-        \STATE demote $job$ to a lower-priority queue
-    \ENDIF
-\ENDFOR
-
-\STATE evict low-priority non-imminent requests according to the KV eviction policy
-\STATE \textbf{return} $B^\star$
-\end{algorithmic}
-\end{algorithm}
-
-\begin{figure}[t]
-\centering
-\fbox{
-\parbox{0.95\columnwidth}{
-\centering
-\vspace{0.4em}
-\textbf{Placeholder for Decode Scheduling Figure}\\[0.4em]
-\footnotesize
-Recommended drawing: a two-part figure.\\
-Left: requests move across $Q_1,\dots,Q_n$ as attained service increases; starving requests are promoted.\\
-Right: KV state transitions \texttt{remote} $\rightarrow$ \texttt{prefetching} $\rightarrow$ \texttt{resident}, followed by possible cold-state eviction back to \texttt{remote}.\\
-At the bottom, show that an iteration batch is admitted only for requests whose priority is high enough and whose KV can be activated under memory and prefetch budgets.\\
-Annotate three benefits: responsiveness for short jobs, bounded starvation, and controllable memory footprint.
-\vspace{0.4em}
-}
-}
-\caption{Illustration of decode scheduling in PhaseServe. Requests are organized by attained service and urgency, admitted subject to KV and prefetch budgets, and updated at iteration boundaries to balance responsiveness, fairness, and throughput.}
-\label{fig:decode}
-\end{figure}
-
-\subsection{KV-State Manager}
-
-A key design choice in PhaseServe is to elevate KV cache to a first-class managed system resource. The KV-state manager tracks where each request state resides and coordinates prefetch, transfer, and eviction with the local schedulers.
-
-\subsubsection{KV Residency States}
-
-For each active request, the KV-state manager tracks one of four residency states:
-\begin{itemize}
-    \item \textbf{resident}: the KV state is already in the target GPU memory and can be used immediately;
-    \item \textbf{staged}: metadata and address mapping are installed, but the state is not yet fully ready for execution;
-    \item \textbf{prefetching}: the state is currently being transferred or restored;
-    \item \textbf{remote}: the state is stored in host memory or another device and is not immediately executable.
-\end{itemize}
-
-This explicit state machine decouples logical request scheduling from physical state placement. The scheduler reasons about readiness through residency states rather than issuing ad hoc swap operations.
-
-\subsubsection{Proactive Prefetch and Cold-State Eviction}
-
-When a request becomes likely to run in the near future, the decode engine issues a prefetch request before the iteration in which the request is expected to be admitted. Conversely, when memory pressure rises, PhaseServe evicts low-priority, non-imminent requests using a cold-state policy that considers both future urgency and reactivation cost.
-
-Let the KV size of request $r$ be $S_{\text{KV}}(r)$ and the effective transfer bandwidth be $B$. The transfer time is
-\begin{equation}
-T_{\text{swap}}(r)=\frac{S_{\text{KV}}(r)}{B}.
-\label{eq:swap_time}
-\end{equation}
-PhaseServe attempts to hide this cost by overlapping prefetch with ongoing decode computation whenever possible. The exposed latency is therefore only the portion of transfer time that cannot be hidden behind useful work.
-
-\subsubsection{Prefill-to-Decode State Handoff}
-
-When a prefill engine completes a request, it materializes the initial KV state and registers the handoff with the KV-state manager. The actual handoff to the selected decode engine is then scheduled according to the routing decision and the current transfer budget. Because state movement is explicitly modeled, PhaseServe can trade off locality and balance: a decode engine with slightly higher queue pressure may still be preferred if the state-transfer path is significantly cheaper.
-
-\subsection{Implementation Notes}
-
-PhaseServe is implemented on top of a phase-disaggregated serving runtime. The global controller executes asynchronously with respect to local engine execution and maintains only lightweight summaries instead of per-iteration centralized state. Prefill and decode engines therefore make local decisions independently within the policy envelope set by the controller at each control epoch. This separation keeps the control path lightweight and prevents the controller from becoming a runtime bottleneck.
-
-The design intentionally relies only on low-cost signals such as input length, current context length, queue age, KV footprint, and transfer readiness. This choice avoids the brittleness of exact latency prediction while still exposing enough structure for effective scheduling and control.
-
-\subsection{Discussion}
-
-The design of PhaseServe rests on a simple but important principle: \emph{after prefill and decode are disaggregated, the dominant bottleneck often shifts from inter-phase interference to intra-phase heterogeneity and cross-phase imbalance}. Prefill benefits from known-size, utility-aware batch construction; decode benefits from service-aware iterative scheduling; and the system as a whole benefits from an explicit control plane that reasons about load, state, and topology jointly.
-
-Compared with naive phase-disaggregated serving, PhaseServe makes phase-aware control explicit at three levels. At the \emph{local scheduling level}, it uses different scheduling abstractions for known-size prefill and unknown-size decode. At the \emph{state-management level}, it turns KV cache into an explicitly managed resource that enables concurrency-aware decode scheduling. At the \emph{cross-phase coordination level}, it continuously regulates routing and effective phase balance under non-stationary workloads. Together, these mechanisms allow PhaseServe to simultaneously improve TTFT, TPOT, and overall serving efficiency under realistic heterogeneous workloads.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-\section{Implementation}\label{implementation}
-PhaseServe is implemented on top of the open-source DistServe \cite{distserve} framework. Our implementation mainly extends DistServe’s scheduler to support phase-specialized scheduling, including cost-aware request routing, length-aware prefill scheduling with capacity-aware batching, and MLFQ-based decode scheduling with proactive KV-cache management. The system uses NCCL \cite{nccl} for tensor and pipeline parallel communication, and each serving instance is realized as a distributed inference engine built from multiple Ray \cite{ray} actors. Prefill and decode remain fully disaggregated as in DistServe, while a lightweight profiler provides cost estimates that guide scheduling and routing decisions. KV-cache state is managed in block form to support decode-side queue transitions and cache movement with low overhead. Overall, PhaseServe preserves the underlying distributed serving stack of DistServe while adding the mechanisms needed to realize phase-specialized scheduling.
-
-\section{Evaluation}\label{evaluation}
-We evaluate PhaseServe to answer the following questions:
-\begin{itemize}
-    \item Does PhaseServe improve TTFT and TPOT over representative unified and phase-disaggregated baselines?
-    \item Do the proposed prefill and decode schedulers contribute complementary benefits?
-    \item Under the tested deployment setting, does PhaseServe improve SLO attainment under heterogeneous workloads?
-\end{itemize}
-
-We compare PhaseServe against DistServe \cite{distserve}, a representative phase-disaggregated serving system, and vLLM \cite{vllm}, a widely used unified serving engine. We emphasize that our goal is to evaluate the effect of \emph{phase-specialized scheduling} under a fixed deployment setting, rather than to exhaustively benchmark every recent serving runtime.
-
-\subsection{Experimental Setup}
-\textit{Testbed}. We deployed PhaseServe in a node consisting of 8 NVIDIA PCIe H20-96 GB GPUs. Each GPU is connected to the other via an NVLink bridge with 900 GB/s bidirectional bandwidth. In addition, the CPU is a 128 vCPU AMD EPYC 9K84 96-core processor with 1200 GB of memory. Our system uses a fully-connected NVLink topology (NV18), where all eight GPUs are directly connected via point-to-point NVLink links. Although the machine spans two NUMA domains, GPU–GPU communication never traverses PCIe or the Root Complex, resulting in a uniform NVLink bandwidth fabric.
-
-\textit{Models}. To evaluate PhaseServe, we employ the OPT\cite{b3} series in our experiments, as they are widely regarded as representative in the research community. The OPT family comprises models of various sizes, ranging from 125 million to 175 billion parameters. We use the OPT-6.7B and OPT-66B models for our evaluation. All model parameters in our experiments are configured with FP16 precision.
-
-\textit{Workloads}. We evaluate the capabilities of PhaseServe using two representative workloads that correspond to common LLM inference scenarios. The dataset statistics used in our experiments are summarized in Table~\ref{tab:datasets}. For chat-oriented inference, we adopt the ShareGPT \cite{sharegpt} dataset, which contains real-world multi-turn conversations collected from ChatGPT users. The dataset features diverse prompt and response lengths, making it well-suited for stress-testing prefill and decode scheduling under highly variable input conditions. For code-generation workloads, we employ the HumanEval \cite{humaneval} benchmark, a widely used dataset for evaluating functional code generation. Compared with dialogue datasets, HumanEval requests typically contain short problem descriptions but require models to generate longer and structurally constrained outputs, providing a complementary workload pattern for testing decode-stage performance and KV-cache management.
-
-\begin{table}[t]
-\centering
-\caption{Statistics of prompt and output token lengths for the evaluated datasets}
-\label{tab:datasets}
-\resizebox{\columnwidth}{!}{
-\begin{tabular}{lcccccc}
-\hline
-\textbf{Dataset} 
-& \multicolumn{3}{c}{\textbf{Prompt Tokens}} 
-& \multicolumn{3}{c}{\textbf{Output Tokens}} \\
-\cline{2-4} \cline{5-7}
-& \textbf{Avg} & \textbf{Median} & \textbf{P90} 
-& \textbf{Avg} & \textbf{Median} & \textbf{P90} \\
-\hline
-ShareGPT  & 768.2 & 695   & 1556  & 195.9 & 87.0  & 518.0 \\
-HumanEval & 131.3 & 117.0 & 225.7 & 53.8  & 45.5  & 106.8 \\
-\hline
-\end{tabular}
-}
-\end{table}
-
-\textit{Placement Strategies}. Considering the model, workload characteristics, and SLO attainment targets, DistServe decides the allocation of prefill and decoding instances through simulation. PhaseServe follows a similar approach to define its parallelism strategy, with the instance placement used in our experiments summarized in Table~\ref{tab:placement}.
-
-\begin{table}[t]
-\centering
-\caption{Placement strategies (TP = tensor parallelism, PP = pipeline parallelism)}
-\label{tab:placement}
-\begin{tabular}{lcc}
-\hline
-\textbf{Model} & \textbf{Prefill Placement} & \textbf{Decode Placement} \\
-\hline
-OPT-6.7B      & TP-2, PP-1 & TP-2, PP-1 \\
-OPT-66B      & TP-2, PP-2 & TP-2, PP-2 \\
-\hline
-\end{tabular}
-\end{table}
-
-\textit{Metrics}. We report TTFT and TPOT as the primary latency metrics, and include both median and P90 values to capture typical and tail behavior. We additionally report SLO attainment to measure how often requests satisfy target service thresholds under increasing load.
-
-\subsection{End-to-End Performance}
+Figure~\ref{fig:phase-overview} summarizes the control loop. A DistServe-style runtime exposes pressure propagation through the bridge and decode side. PhaseServe uses this feedback to update budgets: PBC translates pressure into a budget object and a bottleneck regime, BPS and KAS execute actions inside the resulting feasible sets, and the next scheduling epoch observes whether pressure has been released or shifted.
 
 \begin{figure*}[t]
 \centering
-\includegraphics[width=0.3\textwidth]{label.pdf}
-\vspace{4pt}
-
-\subfloat[OPT-6.7B on ShareGPT dataset.]{%
-    \includegraphics[width=0.24\textwidth]{result1.pdf}%
-    \label{fig:opt67b_sharegpt}%
-}
-\hfill
-\subfloat[OPT-6.7B on HumanEval dataset.]{%
-    \includegraphics[width=0.24\textwidth]{result2.pdf}%
-    \label{fig:opt67b_humaneval}%
-}
-\hfill
-\subfloat[OPT-66B on ShareGPT dataset.]{%
-    \includegraphics[width=0.24\textwidth]{result3.pdf}%
-    \label{fig:opt66b_sharegpt}%
-}
-\hfill
-\subfloat[OPT-66B on HumanEval dataset.]{%
-    \includegraphics[width=0.245\textwidth]{result4.pdf}%
-    \label{fig:opt66b_humaneval}%
-}
-\caption{End-to-end latency of PhaseServe compared with DistServe and vLLM.}
-\label{fig:four-horiz}
+\includegraphics[width=\textwidth]{../results/figures/mechanism/phaseserve_overview_imagegen.png}
+\caption{PhaseServe as a pressure-budgeted control loop. Panel (a) shows the remaining pressure propagation in a phase-disaggregated runtime: prefill and decode are separated, but prefill injection can still create bridge, first-token, decode, KV, and swap pressure. Panel (b) shows the PhaseServe control contract: PBC converts pressure signals into typed budgets and regime ownership, and BPS/KAS execute only within the feasible action spaces chosen for the current regime.}
+\label{fig:phase-overview}
 \end{figure*}
 
+\subsection{Pressure-Budget Formulation}
 
-\textbf{Overall trend.}
-Across both workloads and both model scales, PhaseServe consistently reduces TTFT and TPOT relative to the baselines over the tested load ranges. The improvement is especially pronounced in tail latency, indicating that phase-specialized scheduling is particularly beneficial under heterogeneous workloads and increasing contention.
+At scheduling epoch $t$, PhaseServe observes a pressure vector
+\begin{equation}
+p(t)=\langle p_{\mathrm{ctx}},p_{\mathrm{bridge}},p_{\mathrm{first}},p_{\mathrm{decode}},p_{\mathrm{kv}},p_{\mathrm{swap}},p_{\mathrm{age}}\rangle .
+\end{equation}
+The components summarize, respectively, context queue pressure, bridge or unaccepted requests, requests waiting for their first decode step, decode backlog, GPU KV-block scarcity, swap pressure, and bounded-progress pressure. These signals are deliberately low cost: they are derived from queue length, waiting age, generated-token count, resident state, available GPU blocks, and swap feasibility.
 
-\textbf{ShareGPT.}
-Figures~\ref{fig:opt67b_sharegpt} and~\ref{fig:opt66b_sharegpt} show the results on ShareGPT. This workload stresses both prefill scheduling, due to long and highly variable prompt lengths, and decode scheduling, due to diverse response lengths. Under increasing request rate, PhaseServe maintains substantially lower TTFT than both DistServe and vLLM. For example, on OPT-6.7B, when the request rate increases from 5.5 to 9~req/s, PhaseServe keeps median TTFT around 1.2--1.5~s, while DistServe reaches 4--6~s and vLLM exceeds 10~s. This corresponds to approximately 2.5$\times$ speedup over DistServe and up to 5$\times$ over vLLM. Tail TTFT shows a similar trend.
+PBC maps $p(t)$ to a structured budget vector
+\begin{equation}
+b(t)=\langle B_{\mathrm{pre}},M_{\mathrm{pre}},L_{\mathrm{scan}},B_{\mathrm{swap}},R_{\mathrm{bridge}},I_{\mathrm{dec}}\rangle ,
+\end{equation}
+where $B_{\mathrm{pre}}$ bounds prefill tokens admitted in the next context batch, $M_{\mathrm{pre}}$ reserves a prefill-side block margin for downstream decode, $L_{\mathrm{scan}}$ bounds decode candidate scanning, $B_{\mathrm{swap}}$ bounds swap-ins per iteration, $R_{\mathrm{bridge}}$ captures bridge-aware reserve and relaxed-admission state, and $I_{\mathrm{dec}}\in[0,1]$ controls the strength of decode-side attained-service and KV-aware utility. In the implementation, $R_{\mathrm{bridge}}$ is encoded through bridge pressure, first-token debt, and decode-side bridge reserve, fastlane, and completion-drain gates rather than as one standalone counter.
 
-PhaseServe also improves TPOT on ShareGPT. Median TPOT remains around 0.025--0.028~s, corresponding to about 1.4$\times$--1.6$\times$ speedup over DistServe and 2$\times$--2.5$\times$ over vLLM. P90 TPOT remains below 0.06~s over the tested range, whereas DistServe exhibits substantially larger tail latency at high load. These improvements are consistent with the design of PhaseServe: length-aware prefill scheduling reduces queueing and head-of-line blocking for short requests, while attained-service-aware decode scheduling improves responsiveness during iterative generation.
+This formulation differs from ordinary backpressure. A binary backpressure mechanism mainly decides whether to admit more work. PBC decides which action space to shrink: prefill token injection, KV footprint, bridge admission, swap-in exposure, or decode local reordering. BPS and KAS then solve phase-local scheduling problems over feasible sets determined by the budget:
+\begin{equation}
+a_t=\pi_{\mathrm{phase}}(A_{\mathrm{phase}}(b(t)), U_{\mathrm{phase}}),
+\end{equation}
+where $\pi_{\mathrm{phase}}$ is a bounded online policy that filters infeasible actions and greedily ranks the remaining candidates. PhaseServe uses pressure-drift quantities such as pressure potential and pressure injection as diagnostics; it does not claim a formal global optimality guarantee.
 
-Overall, on the ShareGPT dataset, PhaseServe significantly outperforms both baselines in first-token response and continuous generation, showing that phase-specialized scheduling is effective under long-context and highly variable dialogue workloads.
+\subsection{PBC: Regime-Aware Pressure-Budget Controller}
 
-\textbf{HumanEval.}
-Figures~\ref{fig:opt67b_humaneval} and~\ref{fig:opt66b_humaneval} show the results on HumanEval. Compared with ShareGPT, this workload has shorter prompts and relatively lighter prefill pressure, but still exposes decode-side variability. PhaseServe continues to outperform both baselines on TTFT and TPOT. On OPT-6.7B, when the request rate is 28--31.5~req/s, median TTFT remains at 0.65--0.85~s, compared with 0.9--1.2~s for DistServe and 4--6~s for vLLM. This corresponds to about 1.5$\times$ speedup over DistServe and up to 9$\times$ over vLLM. P90 TTFT follows the same pattern, remaining at 1.1--1.4~s while vLLM exceeds 12~s.
+PBC is the control contract connecting the two phase-specialized schedulers. Its motivation is that local improvements can otherwise transfer pressure across phases. A prefill scheduler that only maximizes token utilization may finish context computation quickly but push too many requests into the bridge and decode queues. A decode scheduler that only follows attained-service order may select requests that are logically urgent but currently expensive to activate because of GPU-block or swap constraints. PBC coordinates these local policies so that they operate on compatible pressure objectives.
 
-For TPOT, PhaseServe maintains median TPOT latency around 0.02--0.03~s, lower than DistServe (0.03--0.04~s) and vLLM (0.04--0.05~s), corresponding to about 1.5$\times$ speedup over DistServe and about 2$\times$ over vLLM. P90 TPOT remains around 0.06~s across the tested range.
-
-The HumanEval results suggest that the benefit of PhaseServe is not limited to long-prompt dialogue workloads. Even when prefill heterogeneity is less severe, decode-side scheduling still provides measurable latency gains.
-
-\textbf{Interpretation.}
-Taken together, these results support the main claim of this paper: once prefill and decode are disaggregated, the remaining latency bottlenecks are largely intra-phase rather than inter-phase. PhaseServe improves performance by matching scheduling policy to phase characteristics: known-size scheduling for prefill and unknown-size scheduling for decode. The effect is most visible in tail latency, where heterogeneous workloads would otherwise amplify queueing and straggler effects.
-
-\subsection{SLO Attainment}
-
-The SLO attainment results are shown in Figure~\ref{fig:SLO}, and the thresholds are summarized in Table~\ref{tab:SLO}. Across the tested rates, PhaseServe consistently achieves higher SLO attainment than DistServe. On ShareGPT, at a per-GPU request rate of 4.5~req/s, PhaseServe improves TTFT and TPOT SLO satisfaction by 1.21$\times$ and 1.94$\times$, respectively.
-
-\begin{figure}[t]
-    \centering
-    \includegraphics[width=0.6\linewidth]{label-SLO.pdf}
-    \vspace{0.1em}
-
-    \subfloat[SLO on ShareGPT dataset.]{
-        \includegraphics[width=0.48\linewidth]{67b-share-SLO.pdf}
-        \label{fig:67b-share-SLO}
-    }
-    \hfill
-    \subfloat[SLO on HumanEval dataset.]{
-        \includegraphics[width=0.46\linewidth]{67b-humaneval-SLO.pdf}
-        \label{fig:67b-humaneval-SLO}
-    }
-
-    \caption{SLO attainment rates on OPT-6.7B.}
-    \label{fig:SLO}
-\end{figure}
+PBC runs in four steps. First, it normalizes each pressure component against a target operating range and aggregates related components into context, bridge/first-token, decode, soft memory/swap, and hard-feasibility summaries. Second, it classifies the current bottleneck regime and assigns an owner. The first-token-limited family is split into two submodes: a context-limited submode, where prefill queueing dominates and BPS is the TTFT owner, and a bridge/first-decode-limited submode, where completed contexts are waiting for decode admission and KAS is the TTFT owner. A decode-heavy regime is dominated by ready-decode backlog or soft swap cost; a KV/swap-limited regime is dominated by infeasible block allocation or swap-budget exhaustion; and a mixed regime has several pressure components close to their thresholds. Third, PBC maps the regime and normalized pressure into typed budgets. Context pressure protects bounded prefill progress without ignoring downstream budgets. Bridge or first-decode pressure increases bridge reserve and first-decode admission, and may cap additional prefill injection if the bridge remains high. Hard KV/swap pressure tightens $B_{\mathrm{pre}}$, increases $M_{\mathrm{pre}}$, lowers $L_{\mathrm{scan}}$ and $B_{\mathrm{swap}}$, and makes hard gates precede soft scheduling utility. Decode backlog raises $I_{\mathrm{dec}}$ when memory and swap pressure are safe. Finally, PBC applies hysteresis and smoothing so that small pressure oscillations do not cause frequent mode switches.
 
 \begin{table}[t]
 \centering
-\caption{Absolute SLO thresholds used in the evaluation.}
-\label{tab:SLO}
-\begin{tabular}{lccc}
+\caption{PBC decision procedure at each scheduling epoch.}
+\label{tab:pbc-procedure}
+\scriptsize
+\begin{tabular}{>{\raggedright\arraybackslash}p{0.28\columnwidth}>{\raggedright\arraybackslash}p{0.62\columnwidth}}
 \hline
-\textbf{Model} & \textbf{Dataset} & \textbf{TTFT (s)} & \textbf{TPOT (s)} \\
+\textbf{Step} & \textbf{Action}\\
 \hline
-OPT-6.7B & ShareGPT  & 0.4 & 0.03 \\
-OPT-6.7B & HumanEval & 0.1 & 0.03 \\
+Normalize & Scale context, bridge, first-token, decode, KV, swap, and age signals by their target ranges.\\
+Classify & Select context-limited, bridge/first-decode-limited, decode-heavy, KV/swap-limited, or mixed; assign BPS or KAS as the regime owner.\\
+Budget & Update $B_{\mathrm{pre}}$, $M_{\mathrm{pre}}$, $L_{\mathrm{scan}}$, $B_{\mathrm{swap}}$, $R_{\mathrm{bridge}}$, and $I_{\mathrm{dec}}$ according to the typed pressure-to-budget mapping in Table~\ref{tab:pbc-mapping}.\\
+Stabilize & Apply hysteresis and smoothing before exposing the budget to BPS and KAS.\\
+Arbitrate & Enforce feasibility and memory safety before progress and phase-local utility.\\
 \hline
 \end{tabular}
 \end{table}
 
-These results complement the latency curves by showing that the gains of PhaseServe are not limited to average-case behavior. Instead, they translate into a higher fraction of requests meeting service targets under load. This is particularly important for production settings, where predictable latency often matters more than peak throughput alone.
-
-At the same time, the absolute SLO values also indicate that the tested configuration eventually becomes overloaded as request rate increases. We therefore interpret SLO attainment primarily as a comparative measure across systems under the same deployment setting, rather than as a claim that all workloads satisfy strict production targets at the highest tested load.
-
-\subsection{Ablation Studies}
-
-
-
-In this section, we study the individual effects of the prefill and decode schedulers in PhaseServe. We construct two variants: \textsc{PhaseServe-no-prefill-scheduler}, which replaces the prefill-side length-aware scheduling and capacity-aware batching with a DistServe-style FCFS policy and fixed batch size; and \textsc{PhaseServe-no-decode-scheduler}, which replaces the MLFQ-based decode scheduler with a DistServe-style FCFS policy in the decoding phase. We evaluate these variants on the OPT-6.7B model.
-
-\begin{figure}[htbp]
+\begin{table*}[t]
 \centering
-\subfloat[TTFT P90 latency]{%
-    \includegraphics[width=0.49\columnwidth]{ablation1.pdf}%
+\caption{Typed pressure-to-budget dependency graph used by PBC. The table specifies which budget knobs move under each pressure family, which executor owns the response, and whether the response is a hard feasibility constraint or a soft utility change.}
+\label{tab:pbc-mapping}
+\scriptsize
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.18\textwidth}>{\raggedright\arraybackslash}p{0.31\textwidth}>{\raggedright\arraybackslash}p{0.18\textwidth}>{\raggedright\arraybackslash}p{0.25\textwidth}@{}}
+\hline
+\textbf{Pressure family} & \textbf{Budget movement} & \textbf{Primary owner} & \textbf{Scheduling effect}\\
+\hline
+Context queue pressure & Preserve a bounded $B_{\mathrm{pre}}$ progress floor, but keep $M_{\mathrm{pre}}$ and block availability constraints active. & BPS & Improve first-token progress through known-size prefill shaping without unbounded KV injection.\\
+Bridge / first-decode debt & Increase $R_{\mathrm{bridge}}$, reserve feasible first-decode slots, and enable completion drain; cap additional prefill injection if bridge debt persists. & KAS with BPS throttled & Move completed contexts through the bridge and first decode rather than letting BPS continue to push large context batches.\\
+Decode backlog & Increase $I_{\mathrm{dec}}$ and keep $L_{\mathrm{scan}}$ large when memory and swap pressure are safe. & KAS & Emphasize TPOT-oriented active-set shaping and attained-service fairness inside the feasible set.\\
+Soft memory / swap cost & Increase resident preference and swap-cost penalty; reduce scan exposure as soft swap cost rises. & KAS & Prefer requests that are cheap to keep KV-feasible while still preserving skip-bounded progress.\\
+Hard KV / swap infeasibility & Tighten $B_{\mathrm{pre}}$, increase $M_{\mathrm{pre}}$, lower $L_{\mathrm{scan}}$ and $B_{\mathrm{swap}}$, and enforce hard gates before any soft utility. & PBC safety gate, then BPS/KAS & Prevent soft priority, oldest progress, or local utilization from bypassing physical block and swap constraints.\\
+Age / skip debt & Raise bounded-progress priority for old prefill requests and repeatedly skipped decode requests, subject to hard feasibility. & BPS and KAS & Avoid starvation without turning progress protection into an unconditional admission rule.\\
+\hline
+\end{tabular}
+\end{table*}
+
+Algorithm~\ref{alg:pbc} summarizes the epoch-level controller. The algorithm is deliberately expressed as a budget update rather than as a request scheduler: PBC never directly chooses a prefill batch or a decode active set. It only decides the pressure regime, applies the fixed conflict order, and exposes the resulting feasible region to the phase-local executors.
+
+\begin{algorithm}[t]
+\caption{Pressure-Budget Controller (PBC)}
+\label{alg:pbc}
+\begin{algorithmic}[1]
+\REQUIRE pressure vector $p(t)$, previous budget $b(t-1)$, previous regime $g(t-1)$
+\ENSURE budget $b(t)$, regime $g(t)$, and owner $o(t)$
+\STATE $s \leftarrow \mathrm{Normalize}(p(t))$
+\STATE $h \leftarrow \max(s_{\mathrm{kv}}, s_{\mathrm{swap}})$ \COMMENT{hard feasibility pressure}
+\IF{$h$ exceeds the hard-pressure threshold}
+    \STATE $g \leftarrow \textsc{KvSwapLimited}$
+    \STATE $o \leftarrow \textsc{SafetyGate}$
+\ELSIF{$s_{\mathrm{ctx}}$ dominates bridge, first-token, and decode pressure}
+    \STATE $g \leftarrow \textsc{FirstTokenLimited}$
+    \STATE $o \leftarrow \textsc{BpsContextOwner}$
+\ELSIF{$\max(s_{\mathrm{bridge}},s_{\mathrm{first}})$ dominates $s_{\mathrm{decode}}$}
+    \STATE $g \leftarrow \textsc{FirstTokenLimited}$
+    \STATE $o \leftarrow \textsc{KasFirstDecodeOwner}$
+\ELSIF{$s_{\mathrm{decode}}$ dominates bridge and first-token pressure}
+    \STATE $g \leftarrow \textsc{DecodeHeavy}$
+    \STATE $o \leftarrow \textsc{KasDecodeOwner}$
+\ELSE
+    \STATE $g \leftarrow \textsc{Mixed}$
+    \STATE $o \leftarrow \textsc{ConflictArbiter}$
+\ENDIF
+\STATE $\hat{b} \leftarrow \mathrm{BaseBudget}()$
+\IF{$g=\textsc{KvSwapLimited}$}
+    \STATE tighten $B_{\mathrm{pre}}$, increase $M_{\mathrm{pre}}$, reduce $L_{\mathrm{scan}}$ and $B_{\mathrm{swap}}$
+\ELSIF{$o=\textsc{BpsContextOwner}$}
+    \STATE preserve bounded BPS progress while respecting bridge and block budgets
+\ELSIF{$o=\textsc{KasFirstDecodeOwner}$}
+    \STATE reserve bridge/first-decode capacity and enable completion drain; cap prefill injection if needed
+\ELSIF{$g=\textsc{DecodeHeavy}$}
+    \STATE increase $I_{\mathrm{dec}}$ and keep $L_{\mathrm{scan}}$ large only when memory/swap pressure is safe
+\ELSE
+    \STATE blend budget updates using the pressure magnitudes in $s$
+\ENDIF
+\STATE apply precedence: feasibility, memory/swap safety, bounded progress, regime ownership, local utility
+\STATE $b(t),g(t) \leftarrow \mathrm{SmoothAndHysteresis}(\hat{b}, b(t-1), g, g(t-1))$
+\RETURN $b(t), g(t), o(t)$
+\end{algorithmic}
+\end{algorithm}
+
+The key output of PBC is not only a set of numeric budgets, but also \emph{regime ownership}. When context-side first-token pressure dominates and hard KV/swap pressure has not been triggered, BPS is the primary TTFT owner: it preserves bounded prefill progress while still obeying token and block budgets. When bridge or first-decode debt dominates, KAS becomes the TTFT owner: it reserves feasible first-decode capacity, applies bridge-aware admission, and can drain near-completion resident requests to release KV footprint. In this submode, BPS is deliberately constrained from continuing to inject large context batches. When decode pressure dominates, KAS increases decode utility intensity and prioritizes TPOT-oriented active-set shaping. When KV or swap pressure dominates, hard feasibility gates override soft priority in both phases. In mixed regimes, PBC resolves conflicts through a fixed precedence order: physical feasibility, memory/swap safety, bounded progress, regime ownership, bridge/first-token coordination, and phase-local utility. Thus protected-oldest prefill or starved decode requests can receive progress only when physically feasible, and soft utility cannot bypass block or swap limits. This ordering is what makes PBC a typed pressure-to-budget controller rather than a loose collection of heuristics.
+
+\subsection{BPS: Budgeted Prefill Shaping}
+
+BPS is the prefill-side budget executor. Prefill has a useful information property: the prompt length is known before execution and provides a strong proxy for prefill compute and KV footprint. However, using this information without pressure coupling is unsafe. A pure shortest-prompt or bucket policy can reduce local prefill waiting while injecting too many context-finished requests into a decode side that is already constrained.
+
+At each prefill dispatch, BPS forms a bounded candidate window from the waiting queue and always tracks the oldest request as a progress candidate. It partitions the window by prompt-length buckets, constructs one or more candidate batches from cost-compatible requests, and rejects any candidate that violates the physical batch size, $B_{\mathrm{pre}}$, $M_{\mathrm{pre}}$, or available-block constraints. Within that feasible region, BPS scores candidate batches using token fill, padding waste, estimated block risk, short-prompt priority under first-token pressure, and an oldest-progress bonus. When downstream hard pressure is low, this lets BPS pack cost-compatible prompts and keep GPU utilization high. When bridge, first-token, or hard KV/swap pressure rises, PBC changes the feasible region or the score weights, causing BPS to reduce pressure-increasing context injection rather than simply continuing to fill the largest possible batch.
+
+BPS therefore differs from ordinary size-aware batching in two ways. First, its feasible set is pressure-coupled: the same prompt mix may be accepted when downstream pressure is low and rejected or deferred when bridge or hard memory pressure is high. Second, its progress path is bounded but not unconditional: an old request can override soft utility when feasible, but it cannot bypass hard token, batch, or block constraints. This design makes BPS the component that directly controls prompt-induced KV injection and first-token queueing behavior.
+
+\subsection{KAS: KV-Feasible Decode Active-Set Shaping}
+
+KAS is the decode-side budget executor. Decode has the opposite information structure from prefill: each iteration has a bounded immediate cost, but the total output length is unknown and only revealed as tokens are generated. Attained-service policies are attractive because they protect lightly served requests, but in LLM serving they are incomplete without memory feasibility. A request with low attained service may still be a bad immediate choice if it requires expensive swap-in or cannot reserve the next-token KV block.
+
+KAS separates feasibility from priority. For each decode iteration, it first filters ready requests through hard gates: batch capacity, append-block availability, resident or swap-in feasibility, and the PBC swap budget $B_{\mathrm{swap}}$. Only after this hard filtering does KAS rank feasible requests. The ranking combines attained service, waiting age, resident preference, soft swap cost, skip-bounded fairness, and the decode utility intensity $I_{\mathrm{dec}}$ supplied by PBC. This distinction matters: a high swap cost can reduce a request's utility inside the feasible set, but hard swap or append-block infeasibility removes the request from that iteration entirely.
+
+The decode utility intensity controls how aggressively KAS departs from ready-time order. In short-output or first-token-limited regimes, KAS can become FCFS-compatible so that decode-side reordering does not erase BPS's TTFT gains. In long-output or decode-heavy regimes, KAS restores stronger attained-service and KV-aware priority to target TPOT tail latency and short-output protection. Under bridge pressure, KAS may activate a completion-drain path: it prioritizes resident, near-completion, non-first-decode requests that can release KV footprint and unblock bridge admission. This path serves the first-token owner by freeing memory and bridge capacity, rather than applying aggressive attained-service ranking unconditionally.
+
+\begin{table}[t]
+\centering
+\caption{Phase-local executors share the same PBC budget object but apply it to different action spaces.}
+\label{tab:executor-interface}
+\scriptsize
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.14\columnwidth}>{\raggedright\arraybackslash}p{0.34\columnwidth}>{\raggedright\arraybackslash}p{0.34\columnwidth}@{}}
+\hline
+\textbf{Executor} & \textbf{Hard feasibility} & \textbf{Soft utility}\\
+\hline
+BPS & Batch size, prefill-token budget, block margin, available GPU blocks. & Token fill, padding waste, block risk, short-prompt pressure, oldest progress.\\
+KAS & Batch size, append-block availability, resident or swap-in feasibility, swap budget. & Attained service, age, resident preference, soft swap cost, skip-bounded fairness.\\
+\hline
+\end{tabular}
+\end{table}
+
+Algorithm~\ref{alg:budgeted-executors} shows how BPS and KAS consume the same budget object in different action spaces. BPS uses known prompt lengths to build cost-compatible prefill batches under token and block budgets. KAS first filters decode candidates by KV and swap feasibility, then ranks only the feasible set by pressure-weighted utility.
+
+\begin{algorithm}[t]
+\caption{Budgeted Phase Executors (BPS and KAS)}
+\label{alg:budgeted-executors}
+\begin{algorithmic}[1]
+\REQUIRE budget $b(t)$, prefill queue $Q_{\mathrm{pre}}$, ready decode queue $Q_{\mathrm{dec}}$
+\ENSURE prefill batch $C_{\mathrm{pre}}$ and decode active set $C_{\mathrm{dec}}$
+\STATE $W_{\mathrm{pre}} \leftarrow$ bounded window from $Q_{\mathrm{pre}}$ with the oldest request marked protected
+\STATE $\mathcal{G} \leftarrow$ prompt-length buckets over $W_{\mathrm{pre}}$
+\STATE $\mathcal{C}_{\mathrm{pre}} \leftarrow$ candidate batches formed from compatible buckets and the protected request
+\STATE discard $C\in\mathcal{C}_{\mathrm{pre}}$ if it violates batch size, $B_{\mathrm{pre}}$, $M_{\mathrm{pre}}$, or available GPU blocks
+\IF{$\mathcal{C}_{\mathrm{pre}}=\emptyset$}
+    \STATE $C_{\mathrm{pre}} \leftarrow$ feasible protected singleton if it exists; otherwise $\emptyset$
+\ELSE
+\STATE $C_{\mathrm{pre}} \leftarrow \arg\max_{C\in\mathcal{C}_{\mathrm{pre}}} U_{\mathrm{pre}}(C;b(t))$
+\ENDIF
+\STATE $D \leftarrow \mathrm{Scan}(Q_{\mathrm{dec}}, L_{\mathrm{scan}})$; $F \leftarrow \emptyset$
+\FORALL{$r \in D$}
+    \IF{$r$ has a batch slot, append-block feasibility, and resident or swap-in feasibility within $B_{\mathrm{swap}}$}
+        \STATE $F \leftarrow F \cup \{r\}$
+    \ENDIF
+\ENDFOR
+\IF{$F=\emptyset$}
+    \STATE $C_{\mathrm{dec}} \leftarrow \emptyset$; record a hard-feasibility stall
+\ELSE
+    \STATE $F_{\mathrm{bridge}} \leftarrow$ feasible first-decode and bridge-debt requests admitted by $R_{\mathrm{bridge}}$
+    \STATE rank $F\setminus F_{\mathrm{bridge}}$ by attained service, age, resident preference, soft swap cost, skip state, and $I_{\mathrm{dec}}$
+    \STATE $C_{\mathrm{dec}} \leftarrow F_{\mathrm{bridge}} \cup$ highest-ranked remaining requests up to decode batch capacity
+\ENDIF
+\RETURN $C_{\mathrm{pre}}, C_{\mathrm{dec}}$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{../results/figures/mechanism/phaseserve_budget_mechanisms_imagegen.png}
+\caption{Budgeted execution mechanisms in PhaseServe. Panel (a) shows the typed pressure-to-budget dependency graph and the conflict order that separates hard gates from soft utility. Panel (b) shows BPS: known prompt sizes are bucketed into compatible prefill candidates, filtered by token and block budgets, and selected with bounded progress. Panel (c) shows KAS: ready decode candidates pass hard KV/swap feasibility gates before first-decode reservation, completion drain, and soft attained-service/KV-cost ranking are applied.}
+\label{fig:budgeted-mechanisms}
+\end{figure*}
+
+\subsection{Putting PBC, BPS, and KAS Together}
+
+PhaseServe runs as a lightweight online loop. Each epoch begins by collecting pressure signals from the bridge, prefill queue, decode queue, KV allocator, and swap path. PBC updates the budget object and bottleneck regime. The next prefill dispatch invokes BPS with the current prefill token and block budgets; the next decode iteration invokes KAS with the current scan, swap, bridge-reserve, and utility budgets. After the actions execute, the runtime records pressure movement, infeasible rounds, protected progress, and selected action statistics for the next epoch.
+
+This coupling is intentionally local. PhaseServe does not require exact output-length prediction, a global optimizer, or centralized per-iteration scheduling. BPS uses known prompt size and bounded candidate scanning. KAS uses generated-token count, residency, swap feasibility, and skip counters. PBC consumes aggregate pressure summaries and emits a compact budget object. These choices preserve the structure of a DistServe-style disaggregated runtime while replacing its FCFS runtime scheduling with pressure-aware phase-specialized control.
+
+\subsection{Design Boundaries}
+
+PhaseServe's claims are bounded by the control layer it implements. It is not a cluster-level placement algorithm and does not search tensor or pipeline parallelism configurations. It does not introduce a new KV-cache architecture; it uses KV residency, block availability, and swap feasibility as scheduling inputs. It also does not assume exact prediction of final output length. PhaseServe targets operating regions where pressure propagation is observable: prompt skew, decode backlog, bridge pressure, KV scarcity, or mixed first-token/decode contention. Its performance claims are therefore tied to the measured workload, deployment, pressure window, and reported latency percentiles.
+
+\section{Implementation}\label{implementation}
+PhaseServe is implemented on top of the open-source DistServe \cite{distserve} framework. The implementation preserves DistServe's phase-disaggregated execution stack and extends its runtime scheduler with PBC, BPS, and KAS. PBC maintains lightweight pressure summaries and emits typed budgets. BPS uses these budgets when constructing prefill batches, and KAS uses them when selecting decode active sets under KV and swap feasibility constraints. The system uses NCCL \cite{nccl} for tensor and pipeline parallel communication, and each serving instance is realized as a distributed inference engine built from multiple Ray \cite{ray} actors. Overall, PhaseServe keeps the deployment model of DistServe while replacing FCFS runtime scheduling with pressure-budgeted phase scheduling.
+
+\section{Evaluation}\label{evaluation}
+
+We evaluate whether pressure-budgeted phase scheduling improves runtime behavior after prefill and decode have already been disaggregated. The evaluation answers three questions:
+\begin{itemize}
+    \item Does PhaseServe reduce first-token and decode-token latency relative to a DistServe-style phase-disaggregated baseline on the same traces?
+    \item Do the gains hold across chat and long-context workloads, rather than only for a single model or request mix?
+    \item Are PBC, BPS, and KAS each needed in the pressure window used for the main end-to-end claim?
+\end{itemize}
+
+\subsection{Experimental Setup}
+
+\textit{Baseline}. We compare PhaseServe with a DistServe-style baseline that preserves prefill/decode disaggregation but uses the baseline runtime scheduling policy. Both systems use the same request set, arrival trace, model, deployment topology, and metric extraction script for each run. This comparison isolates the effect of the PhaseServe runtime scheduler rather than placement, model parallelism, or workload sampling differences.
+
+\textit{Models and workloads}. Table~\ref{tab:eval-workloads} summarizes the current evaluation matrix. We use OPT-13B on ShareGPT as the main setting because it exposes both prompt-length skew and decode-side variability. We use LLaMA2-13B on ShareGPT to check cross-model behavior on a chat workload, and LLaMA2-13B on LongBench 4K \cite{longbench} to stress long-context prefill pressure. Each setting uses two seeds. The seed controls the sampled request set and the generated arrival trace.
+
+\begin{table}[t]
+\centering
+\caption{Evaluation matrix used for the current end-to-end results.}
+\label{tab:eval-workloads}
+\resizebox{\columnwidth}{!}{
+\begin{tabular}{lccc}
+\hline
+\textbf{Setting} & \textbf{Requests} & \textbf{Seeds} & \textbf{Displayed rate window} \\
+\hline
+OPT-13B + ShareGPT & 128 & 2 & 1.00--2.75 req/s/GPU \\
+LLaMA2-13B + ShareGPT & 128 & 2 & 0.75--2.25 req/s/GPU \\
+LLaMA2-13B + LongBench 4K & 96 & 2 & 1.00--3.00 req/s/GPU \\
+\hline
+\end{tabular}
 }
-\hfill
-\subfloat[TPOT P90 latency]{%
-    \includegraphics[width=0.49\columnwidth]{ablation2.pdf}%
+\end{table}
+
+\textit{Deployment}. All reported runs use the same 1P1D phase-disaggregated deployment: one prefill instance and one decode instance. PhaseServe keeps the baseline deployment fixed and changes only the runtime scheduling layer. This fixed-topology protocol follows the paper's scope: PhaseServe is a pressure-budgeted scheduler, not a cluster-level placement or parallelism search algorithm.
+
+\textit{Metrics}. We report TTFT and TPOT as the primary latency metrics. The main end-to-end figure reports two percentiles per metric: TTFT p50 and p90, and TPOT p90 and p95. We use p50 to show typical first-token behavior, p90/p95 to show tail behavior, and avoid making the main claim depend on TPOT p99, which is more sensitive to overload and component tradeoffs. SLO attainment and goodput are tracked as service metrics and are used in the ablation analysis, but the main latency claim is stated in terms of percentile-level TTFT and TPOT.
+
+\subsection{End-to-End Latency}
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{../results/figures/stage4q_main_e2e_windows/stage4q_main_latency_windows_combined.pdf}
+\caption{End-to-end latency comparison between PhaseServe and a DistServe-style baseline under selected pressure windows. The top row reports TTFT p50 and p90; the bottom row reports TPOT p90 and p95. Each point is the mean over two seeds using matched request and arrival traces. The windows differ by workload because prefill, decode, and KV pressure emerge at different rates.}
+\label{fig:stage4q-main-e2e}
+\end{figure*}
+
+Figure~\ref{fig:stage4q-main-e2e} shows that PhaseServe reduces both first-token and decode-token latency in the pressure windows where the baseline develops queueing and KV pressure. Table~\ref{tab:e2e-summary} summarizes the corresponding improvement ranges. On OPT-13B + ShareGPT, PhaseServe reduces TTFT p50 by 25.7--96.6\% and TTFT p90 by 22.8--94.3\% over the displayed window. Decode-token latency also improves: TPOT p90 falls by 29.4--77.0\%, and TPOT p95 falls by 27.9--80.0\%.
+
+The LLaMA2-13B results show that the behavior is not specific to OPT. On LLaMA2-13B + ShareGPT, PhaseServe reduces TTFT p50 by 23.0--90.0\% and TTFT p90 by 18.4--91.5\%. TPOT p90 improves by 24.5--80.1\%, while TPOT p95 improves by 11.1--80.6\%. The smaller lower bound for TPOT p95 reflects the workload-sensitive nature of decode tails, and is why the paper reports percentiles rather than a single aggregate speedup.
+
+The LongBench 4K setting exercises a different regime. Long prompts create strong prefill and KV pressure, while decode remains sensitive to active-set feasibility. In this setting, PhaseServe reduces TTFT p50 by 42.9--63.5\% and TTFT p90 by 27.5--42.8\%. The decode-side improvement is also stable: TPOT p90 improves by 66.3--68.6\% and TPOT p95 by 63.1--69.2\%. These results indicate that pressure-budgeted scheduling is useful not only for chat-style prompt skew, but also for long-context workloads where prefill and KV pressure dominate the operating region.
+
+\begin{table}[t]
+\centering
+\caption{PhaseServe latency reduction over the DistServe-style baseline in Figure~\ref{fig:stage4q-main-e2e}. Ranges are computed over the displayed per-GPU rate window; positive values mean lower latency.}
+\label{tab:e2e-summary}
+\resizebox{\columnwidth}{!}{
+\begin{tabular}{lccccc}
+\hline
+\textbf{Setting} & \textbf{Window} & \textbf{TTFT p50} & \textbf{TTFT p90} & \textbf{TPOT p90} & \textbf{TPOT p95} \\
+\hline
+OPT-13B + ShareGPT & 1.00--2.75 & 25.7--96.6\% & 22.8--94.3\% & 29.4--77.0\% & 27.9--80.0\% \\
+LLaMA2-13B + ShareGPT & 0.75--2.25 & 23.0--90.0\% & 18.4--91.5\% & 24.5--80.1\% & 11.1--80.6\% \\
+LLaMA2-13B + LongBench 4K & 1.00--3.00 & 42.9--63.5\% & 27.5--42.8\% & 66.3--68.6\% & 63.1--69.2\% \\
+\hline
+\end{tabular}
 }
-\caption{Ablation Studies}
-\label{fig:ablation}
-\end{figure}
+\end{table}
 
-As shown in Figure~\ref{fig:ablation}, disabling the prefill scheduler results in a noticeable increase in TTFT, particularly at higher request rates. This indicates that the prefill-side design of PhaseServe---namely length-aware request ordering and capacity-aware batch construction---is effective in reducing head-of-line blocking and queueing delay under heterogeneous prompt lengths. In contrast, disabling the decode scheduler primarily degrades TPOT, leading to higher token-level latency under load. This result is consistent with the role of the MLFQ-based scheduler in prioritizing lightly served requests and improving responsiveness during iterative decoding.
+\subsection{Component Ablation}
 
-PhaseServe with both schedulers enabled consistently achieves the best overall latency profile across the tested per-GPU rates. These results suggest that the two schedulers provide complementary benefits: the prefill scheduler mainly improves request-entry latency, while the decode scheduler mainly improves generation-stage responsiveness.
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{../results/figures/stage4o_stage4p/stage4p_ablation_improvement_heatmap.pdf}
+\caption{Targeted OPT-13B + ShareGPT component ablation in the same pressure window as the main OPT end-to-end result. Each cell reports the improvement of full PhaseServe over the ablated variant, averaged over two seeds. Positive latency values mean full PhaseServe is lower; positive SLO values are percentage-point gains. TPOT p99 is shown as a tradeoff-sensitive secondary metric rather than the main ablation claim.}
+\label{fig:stage4p-ablation}
+\end{figure*}
 
-Overall, the evaluation consistently shows that PhaseServe improves TTFT, TPOT, and SLO attainment under the tested deployment setting. These results support our central claim that, after prefill and decode are disaggregated, intra-phase scheduling remains a dominant source of latency, and that phase-specialized scheduling is effective in reducing this bottleneck.
+Figure~\ref{fig:stage4p-ablation} evaluates whether PBC, BPS, and KAS are jointly needed. The ablation uses OPT-13B + ShareGPT, the same seed0/seed1 request traces as the main OPT experiment, and per-GPU rates from 0.75 to 2.50 req/s/GPU. The full PhaseServe configuration improves SLO attainment, TTFT p90, and TPOT p90 over every component ablation at every measured rate in this window.
 
+Removing PBC weakens the coordinated pressure response. Full PhaseServe improves SLO attainment over the no-PBC variant at all rates and improves both TTFT p90 and TPOT p90 throughout the window. This supports the role of PBC as more than a binary admission rule: it decides which action space should be tightened and which executor owns the response.
 
+Removing BPS makes prefill injection less responsive to the pressure budget. The no-BPS variant loses TTFT p90 and SLO attainment relative to full PhaseServe, especially once the per-GPU rate enters the pressure region. This matches BPS's design role: it uses known prompt sizes under PBC token and block budgets, instead of only applying local FCFS ordering.
+
+Removing KAS weakens decode-side active-set control. Full PhaseServe improves TPOT p90 over the no-KAS variant across the ablation window, while also preserving TTFT p90 gains. The result is consistent with KAS's hard-gate-first design: decode candidates must be feasible under KV and swap constraints before soft attained-service or residency utility is applied.
+
+The ablation also exposes a boundary. TPOT p99 is not uniformly better than every ablation at every rate, particularly under mixed first-token and decode-tail pressure. We therefore use TPOT p90/p95 and SLO/TTFT tails as the main evidence for robust component benefit, and report TPOT p99 as a tradeoff-sensitive secondary metric.
+
+\subsection{Summary of Findings}
+
+The evaluation supports three bounded claims. First, in selected pressure windows, PhaseServe reduces both TTFT and TPOT relative to a DistServe-style phase-disaggregated baseline on matched traces. Second, the benefit appears across OPT-13B and LLaMA2-13B and across chat and long-context workloads, although the rate window and strongest percentile differ by workload. Third, the targeted ablation shows that PBC, BPS, and KAS are complementary: PBC provides pressure ownership, BPS controls prefill injection, and KAS controls KV-feasible decode active sets. The results do not imply all-rate or all-percentile dominance; they characterize the operating regions where runtime pressure propagation is observable and where pressure-budgeted scheduling changes the feasible actions of the two phases.
 
 \section{Related Work}\label{relatedwork}
-\textbf{Inference Serving Optimization.} Recent research on LLM inference serving spans general-purpose systems such as Triton \cite{triton}, as well as LLM-specific solutions like Orca \cite{orca}, vLLM \cite{vllm}, and SARATHI \cite{sarathi}. These systems improve throughput and hardware utilization through techniques such as iterative or continuous batching, paged-attention for KV-cache management, and chunked-prefill with piggybacked decoding. However, most prior work colocates prefill and decoding on the same instance, which can lead to interference, pipeline bubbles, and underutilized resources. To address this, disaggregated prefill-decode architectures have been proposed by DistServe \cite{distserve}, Splitwise \cite{b5}, DéjàVu \cite{b6}, separating stages across instances to enable independent scheduling and better resource utilization. PhaseServe builds on this idea but focuses on practical scheduling and batch management within each phase—length-aware scheduling and capacity-aware batch construction in prefill, and MLFQ with KV-cache management in decode.
 
-\textbf{Model Parallelism.} LLMs with hundreds of billions of parameters require parallel execution across multiple GPUs. Prior work \cite{alpaserve, megatron, alpa, pope, hetegen, exegpt, helix} has explored various strategies for model partitioning and scheduling. Pope \cite{pope} propose analytical models for selecting multi-dimensional partitioning strategies tailored to TPU slices. HeteGen \cite{hetegen} introduces heterogeneous parallelism across CPUs and GPUs, leveraging asynchronous overlap to mitigate I/O bottlenecks. ExeGPT \cite{exegpt} optimizes batch size and tensor parallelism degree based on input/output distributions to maximize throughput under latency constraints. Helix \cite{helix} formulates model partitioning across heterogeneous GPUs and network links as a max-flow problem, capturing both compute and communication heterogeneity. PhaseServe can integrate these model-parallelism techniques into its distributed inference engine, enabling flexible and efficient scaling of LLM workloads.
+\textbf{LLM serving systems.} Modern LLM serving systems improve throughput and latency through continuous batching, paged KV-cache management, chunked prefill, optimized kernels, and distributed execution. Orca introduced iteration-level scheduling for transformer serving \cite{orca}. vLLM uses paged attention to manage KV-cache memory efficiently \cite{vllm}. SARATHI combines chunked prefill with piggybacked decoding to improve utilization under colocated execution \cite{sarathi}. TensorRT-LLM and related runtime systems optimize kernels and execution graphs for production inference \cite{tensorrt}. These systems provide important runtime foundations, but they do not by themselves define how a phase-disaggregated runtime should translate cross-phase pressure into prefill and decode scheduling budgets.
 
-\textbf{Kernel-Level Optimizations.} Efficient attention computation is critical for LLM inference. Techniques such as FlashAttention \cite{flashattention} and FlashAttention-2 \cite{flashattention2} reduce memory access overhead between GPU high-bandwidth memory and on-chip SRAM, improving compute efficiency for long-context sequences. Concurrent approaches like POD-Attention \cite{pod} optimize GPU utilization for hybrid batches, enabling concurrent execution of prefill and decode tasks. Other works explore sparse attention to reduce memory footprint, though they may compromise generation accuracy. PhaseServe is orthogonal to these kernel-level optimizations: our work focuses on scheduling and resource management at the serving-system level, and can be naturally combined with optimized attention kernels to further improve throughput and efficiency.
+\textbf{Prefill--decode disaggregation.} Splitwise, DistServe, and DejaVu separate prefill and decode or move KV state across serving components to reduce co-location interference and improve resource efficiency \cite{b5,distserve,b6}. DistServe further co-optimizes placement and parallelism for TTFT and TPOT objectives \cite{distserve}. WindServe and ShuffleInfer study dynamic scheduling and mixed-workload dispatch in phase-disaggregated serving \cite{windserve,shuffleinfer}. PhaseServe is complementary to this line of work: it assumes a DistServe-style disaggregated runtime and focuses on the remaining runtime pressure propagation problem. Rather than selecting placement or dispatching requests across clusters, PhaseServe maps observed context, bridge, decode, KV, and swap pressure into typed budgets consumed by the local prefill and decode schedulers.
+
+\textbf{Scheduling for heterogeneous service demands.} Classical scheduling policies exploit known processing times, attained service, or fairness constraints to reduce queueing and tail latency \cite{pinedo1992scheduling,nuyens2008foreground}. LLM serving contains both known-size and unknown-size subproblems: prompt length is known before prefill, while final output length is revealed only during decode. PhaseServe uses this asymmetry, but does not treat the two policies as independent. BPS applies known-size shaping only within PBC's prefill token and block budgets, while KAS applies attained-service and residency preferences only after hard KV/swap feasibility gates. The key difference from ordinary size-aware batching or LAS-style scheduling is the typed pressure-to-budget interface that couples the two phase-local action spaces.
+
+\textbf{Parallelism and kernel optimization.} Model-parallel systems and compilers select tensor, pipeline, or heterogeneous execution strategies for large models \cite{alpaserve,megatron,alpa,pope,hetegen,exegpt,helix}. Kernel-level work such as FlashAttention and FlashAttention-2 reduces attention memory traffic and improves compute efficiency \cite{flashattention,flashattention2}. POD-Attention optimizes hybrid prefill/decode attention execution \cite{pod}. PhaseServe operates above these layers. It does not replace model partitioning or attention kernels; instead, it decides which requests enter prefill and decode iterations under the current pressure budget. These optimizations can therefore be combined with PhaseServe's scheduling layer.
 
 \section{Conclusion and Future Work}
 \label{conclusion}
-In this work, we presented PhaseServe, a phase-disaggregated LLM serving system built around the observation that prefill and decoding exhibit fundamentally different scheduling characteristics. Prefill requests have known but highly heterogeneous execution costs, whereas decode requests reveal their total cost only incrementally during generation. Motivated by this asymmetry, PhaseServe applies phase-specialized scheduling to the two stages: length-aware scheduling with capacity-aware batch construction for prefill, and MLFQ-based attained-service-aware scheduling with proactive KV-cache management for decoding.
 
-Our results show that, under the tested deployment setting, this design consistently improves both TTFT and TPOT over representative unified and phase-disaggregated baselines. These findings suggest that, even after prefill and decode are separated, intra-phase scheduling remains a major source of latency and resource inefficiency, and that aligning scheduling policy with phase characteristics is an effective way to address this bottleneck.
+PhaseServe is a pressure-budgeted scheduler for phase-disaggregated LLM serving. It addresses the runtime pressure propagation that remains after prefill and decode have been separated: context queues, bridge waiting, first-token debt, decode backlog, KV-block scarcity, and swap feasibility still couple the two phases. PhaseServe converts these pressure signals into typed budgets through PBC, shapes known-size prefill work through BPS, and selects KV-feasible decode active sets through KAS.
 
-There are several promising directions for future work. First, our current study focuses on a single-node NVLink-connected environment; extending PhaseServe to multi-node deployments would enable a deeper understanding of how phase-specialized scheduling interacts with cross-node KV transfer and network heterogeneity. Second, PhaseServe currently assumes a fixed prefill/decode deployment configuration. Incorporating dynamic resource reallocation and heterogeneous hardware support would further improve adaptability under changing workload conditions.
+Our evaluation shows that PhaseServe reduces TTFT and TPOT relative to a DistServe-style baseline in the measured pressure windows for OPT-13B + ShareGPT, LLaMA2-13B + ShareGPT, and LLaMA2-13B + LongBench 4K. The targeted OPT-13B + ShareGPT ablation further shows that PBC, BPS, and KAS provide complementary benefits: removing any component weakens SLO attainment, TTFT p90, or TPOT p90 in the selected window. These results support the paper's central claim that phase disaggregation needs a runtime pressure-budget interface, not only separate prefill and decode instances.
 
-More broadly, we believe that treating prefill and decoding as distinct scheduling regimes provides a useful perspective for future LLM serving systems, especially as deployment environments and workload diversity continue to grow.
+The current study is bounded in three ways. First, PhaseServe does not solve cluster-level placement or dynamic resource reallocation; it assumes a fixed phase-disaggregated deployment. Second, the evaluation reports selected pressure windows rather than all-rate dominance. Third, extreme decode-tail behavior, especially TPOT p99 under mixed regimes, remains tradeoff-sensitive. Future work should combine pressure-budgeted scheduling with adaptive placement, multi-node KV transfer, and broader workload-specific SLO-scale analysis.
 
 %%
 %% The acknowledgments section is defined using the "acks" environment

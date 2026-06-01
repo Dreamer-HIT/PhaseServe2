@@ -1,0 +1,168 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="820" viewBox="0 0 1800 820" role="img" aria-labelledby="title desc">
+  <title id="title">PhaseServe paper overview</title>
+  <desc id="desc">A paper-style overview with a small phase-disaggregated pressure inset and a PhaseServe runtime architecture/control-loop panel.</desc>
+  <defs>
+    <marker id="dataHead" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M1 1L11 6L1 11Z" fill="#2563eb"/>
+    </marker>
+    <marker id="kvHead" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M1 1L11 6L1 11Z" fill="#0f766e"/>
+    </marker>
+    <marker id="budgetHead" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M1 1L11 6L1 11Z" fill="#d97706"/>
+    </marker>
+    <marker id="pressureHead" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M1 1L11 6L1 11Z" fill="#e11d48"/>
+    </marker>
+    <style>
+      .txt { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; letter-spacing: 0; }
+      .panelTitle { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; font-size: 28px; font-weight: 750; fill: #111827; letter-spacing: 0; }
+      .boxTitle { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; font-size: 25px; font-weight: 750; fill: #111827; letter-spacing: 0; }
+      .label { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; font-size: 19px; font-weight: 650; fill: #1f2937; letter-spacing: 0; }
+      .small { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; font-size: 17px; font-weight: 500; fill: #475569; letter-spacing: 0; }
+      .tiny { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; font-size: 15px; font-weight: 650; fill: #64748b; letter-spacing: 0; }
+      .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 2; }
+      .muted { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 2; }
+      .prefill { fill: #eff6ff; stroke: #93c5fd; stroke-width: 2; }
+      .bridge { fill: #ffffff; stroke: #cbd5e1; stroke-width: 2; }
+      .decode { fill: #ecfdf5; stroke: #5eead4; stroke-width: 2; }
+      .control { fill: #fff7ed; stroke: #fdba74; stroke-width: 2; }
+      .inner { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.7; }
+      .data { fill: none; stroke: #2563eb; stroke-width: 5.5; stroke-linecap: round; marker-end: url(#dataHead); }
+      .kv { fill: none; stroke: #0f766e; stroke-width: 5.5; stroke-linecap: round; marker-end: url(#kvHead); }
+      .budget { fill: none; stroke: #d97706; stroke-width: 4.7; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#budgetHead); }
+      .pressure { fill: none; stroke: #e11d48; stroke-width: 4.2; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 11 9; marker-end: url(#pressureHead); }
+      .thin { fill: none; stroke: #94a3b8; stroke-width: 2; stroke-linecap: round; }
+    </style>
+  </defs>
+
+  <rect width="1800" height="820" fill="#ffffff"/>
+
+  <!-- (a) Small problem inset, following paper overview style rather than full baseline-vs-proposed. -->
+  <g transform="translate(55 58)">
+    <rect class="panel" x="0" y="0" width="430" height="690" rx="14"/>
+    <text class="panelTitle" x="28" y="44">(a) Pressure after phase split</text>
+
+    <g transform="translate(50 112)">
+      <rect class="muted" x="0" y="0" width="135" height="125" rx="12"/>
+      <text class="label" x="28" y="42">Prefill</text>
+      <text class="small" x="28" y="74">FCFS</text>
+      <rect x="28" y="92" width="74" height="16" rx="8" fill="#bfdbfe"/>
+    </g>
+    <g transform="translate(245 112)">
+      <rect class="muted" x="0" y="0" width="135" height="125" rx="12"/>
+      <text class="label" x="28" y="42">Decode</text>
+      <text class="small" x="28" y="74">FCFS</text>
+      <rect x="28" y="92" width="74" height="16" rx="8" fill="#99f6e4"/>
+    </g>
+    <path class="thin" d="M188 174H238" marker-end="url(#kvHead)"/>
+    <text class="tiny" x="213" y="154" text-anchor="middle">KV handoff</text>
+
+    <g transform="translate(54 310)">
+      <rect x="0" y="0" width="318" height="145" rx="12" fill="#fff1f2" stroke="#fb7185" stroke-width="1.8"/>
+      <text class="label" x="24" y="40">Downstream pressure</text>
+      <text class="small" x="24" y="76">bridge queue / first-token wait</text>
+      <text class="small" x="24" y="108">decode backlog / KV or swap pressure</text>
+    </g>
+    <path class="pressure" d="M312 238C335 270 338 294 332 310"/>
+    <path class="pressure" d="M212 310C194 282 187 260 182 238"/>
+
+    <g transform="translate(54 520)">
+      <text class="label" x="0" y="0">Problem</text>
+      <text class="small" x="0" y="38">the split removes co-location,</text>
+      <text class="small" x="0" y="68">but runtime pressure still</text>
+      <text class="small" x="0" y="98">propagates across phases.</text>
+    </g>
+  </g>
+
+  <!-- (b) Main PhaseServe architecture/control loop. -->
+  <g transform="translate(525 58)">
+    <rect class="panel" x="0" y="0" width="1220" height="690" rx="14"/>
+    <text class="panelTitle" x="28" y="44">(b) PhaseServe runtime pressure-budget loop</text>
+
+    <!-- Control plane, visually similar to WindServe / ShuffleInfer control boxes. -->
+    <g transform="translate(304 80)">
+      <rect class="control" x="0" y="0" width="610" height="150" rx="12"/>
+      <text class="boxTitle" x="26" y="38">PBC</text>
+      <text class="label" x="93" y="38">Pressure-budget controller</text>
+      <text class="small" x="26" y="72">pressure vector -> regime/conflict owner -> typed budgets</text>
+      <text class="tiny" x="26" y="106">pressure: bridge / first-token / decode q / KV / swap</text>
+      <text class="tiny" x="26" y="130">budgets: prefill / bridge admission / decode</text>
+    </g>
+
+    <!-- Request path architecture. -->
+    <g transform="translate(32 330)">
+      <text class="boxTitle" x="0" y="-48">Requests</text>
+      <text class="small" x="0" y="-20">known prompt</text>
+      <text class="small" x="0" y="6">unknown output</text>
+      <circle cx="18" cy="42" r="10" fill="#2563eb"/>
+      <rect x="48" y="34" width="118" height="16" rx="8" fill="#dbeafe"/>
+      <circle cx="18" cy="88" r="10" fill="#0f766e"/>
+      <rect x="48" y="80" width="95" height="16" rx="8" fill="#ccfbf1"/>
+    </g>
+
+    <g transform="translate(265 256)">
+      <rect class="prefill" x="0" y="0" width="255" height="228" rx="14"/>
+      <text class="boxTitle" x="26" y="44">Prefill instance</text>
+      <text class="small" x="26" y="76">BPS</text>
+      <g transform="translate(26 108)">
+        <rect class="inner" x="0" y="0" width="205" height="86" rx="10"/>
+        <text class="label" x="18" y="28">known-size buckets</text>
+        <text class="small" x="18" y="56">token + block gates</text>
+        <text class="small" x="18" y="80">protected oldest</text>
+      </g>
+    </g>
+
+    <g transform="translate(575 256)">
+      <rect class="bridge" x="0" y="0" width="215" height="228" rx="14"/>
+      <text class="boxTitle" x="28" y="44">Bridge</text>
+      <text class="small" x="28" y="76">KV handoff</text>
+      <text class="small" x="28" y="106">first-decode admission</text>
+      <g transform="translate(30 146)">
+        <rect x="0" y="0" width="36" height="26" rx="7" fill="#10b981"/>
+        <rect x="50" y="0" width="36" height="26" rx="7" fill="#34d399"/>
+        <rect x="100" y="0" width="36" height="26" rx="7" fill="#a7f3d0"/>
+        <rect x="150" y="0" width="36" height="26" rx="7" fill="#e2e8f0"/>
+      </g>
+    </g>
+
+    <g transform="translate(845 256)">
+      <rect class="decode" x="0" y="0" width="315" height="228" rx="14"/>
+      <text class="boxTitle" x="26" y="44">Decode instance</text>
+      <text class="small" x="26" y="76">KAS</text>
+      <g transform="translate(26 108)">
+        <rect class="inner" x="0" y="0" width="263" height="86" rx="10"/>
+        <text class="label" x="18" y="28">hard gates before utility</text>
+        <text class="small" x="18" y="56">KV append / swap / batch</text>
+        <text class="small" x="18" y="80">short FCFS / long KAS</text>
+      </g>
+      <text class="tiny" x="158" y="216" text-anchor="middle">conditional drain; first-decode reserve</text>
+    </g>
+
+    <!-- Main request / KV path, kept as a strong visual spine. -->
+    <path class="data" d="M190 377H260"/>
+    <path class="data" d="M520 377H570"/>
+    <path class="kv" d="M790 377H840"/>
+    <path class="kv" d="M1160 377H1200"/>
+    <text class="tiny" x="1176" y="350">tokens</text>
+
+    <!-- Pressure observations flow up into PBC. -->
+    <path class="pressure" d="M675 256C682 214 728 194 780 212"/>
+    <path class="pressure" d="M1015 256C1002 212 940 190 892 212"/>
+
+    <!-- Typed budgets flow from PBC into BPS, bridge admission, and KAS. -->
+    <path class="budget" d="M520 212C487 244 455 250 408 256"/>
+    <path class="budget" d="M650 212C654 234 660 244 676 256"/>
+    <path class="budget" d="M905 212C948 238 964 245 1004 256"/>
+
+    <!-- Lightweight legend inside the main panel. -->
+    <g transform="translate(32 618)">
+      <path class="data" d="M0 0H48"/>
+      <text class="tiny" x="64" y="6">request path</text>
+      <path class="pressure" d="M194 0H242"/>
+      <text class="tiny" x="258" y="6">pressure</text>
+      <path class="budget" d="M382 0H430"/>
+      <text class="tiny" x="446" y="6">budget</text>
+    </g>
+  </g>
+</svg>

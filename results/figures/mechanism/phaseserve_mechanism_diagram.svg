@@ -1,0 +1,288 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1080" viewBox="0 0 1800 1080" role="img" aria-labelledby="title desc">
+  <title id="title">PhaseServe mechanism diagram</title>
+  <desc id="desc">A publication-style mechanism diagram showing how PhaseServe converts runtime pressure into typed budgets that coordinate budgeted prefill shaping and KV-feasible decode active-set shaping.</desc>
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f8fafc"/>
+      <stop offset="0.48" stop-color="#eef6f5"/>
+      <stop offset="1" stop-color="#f9f5ed"/>
+    </linearGradient>
+    <linearGradient id="pbcGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fff7ed"/>
+      <stop offset="1" stop-color="#fefce8"/>
+    </linearGradient>
+    <linearGradient id="prefillGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#eff6ff"/>
+      <stop offset="1" stop-color="#ecfeff"/>
+    </linearGradient>
+    <linearGradient id="decodeGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ecfdf5"/>
+      <stop offset="1" stop-color="#f0fdfa"/>
+    </linearGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#0f172a" flood-opacity="0.14"/>
+    </filter>
+    <filter id="smallShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#0f172a" flood-opacity="0.12"/>
+    </filter>
+    <pattern id="grid" width="36" height="36" patternUnits="userSpaceOnUse">
+      <path d="M36 0H0V36" fill="none" stroke="#d9e2ec" stroke-width="1" opacity="0.35"/>
+    </pattern>
+    <marker id="arrowBlue" markerWidth="14" markerHeight="14" refX="12" refY="7" orient="auto" markerUnits="strokeWidth">
+      <path d="M1 1L13 7L1 13Z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrowTeal" markerWidth="14" markerHeight="14" refX="12" refY="7" orient="auto" markerUnits="strokeWidth">
+      <path d="M1 1L13 7L1 13Z" fill="#0f766e"/>
+    </marker>
+    <marker id="arrowAmber" markerWidth="14" markerHeight="14" refX="12" refY="7" orient="auto" markerUnits="strokeWidth">
+      <path d="M1 1L13 7L1 13Z" fill="#d97706"/>
+    </marker>
+    <marker id="arrowRed" markerWidth="14" markerHeight="14" refX="12" refY="7" orient="auto" markerUnits="strokeWidth">
+      <path d="M1 1L13 7L1 13Z" fill="#e11d48"/>
+    </marker>
+    <style>
+      .title { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; font-size: 62px; font-weight: 700; fill: #172033; letter-spacing: 0; }
+      .subtitle { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; font-size: 25px; font-weight: 400; fill: #526173; letter-spacing: 0; }
+      .section { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; font-size: 28px; font-weight: 700; fill: #172033; letter-spacing: 0; }
+      .h2 { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; font-size: 36px; font-weight: 700; fill: #172033; letter-spacing: 0; }
+      .h3 { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; font-size: 22px; font-weight: 700; fill: #172033; letter-spacing: 0; }
+      .body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; font-size: 18px; font-weight: 400; fill: #475569; letter-spacing: 0; }
+      .small { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; font-size: 15px; font-weight: 500; fill: #64748b; letter-spacing: 0; }
+      .tiny { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; font-size: 13px; font-weight: 600; fill: #64748b; letter-spacing: 0; }
+      .chipText { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; font-size: 14px; font-weight: 700; fill: #334155; letter-spacing: 0; }
+      .mono { font-family: "SFMono-Regular", Consolas, Menlo, monospace; font-size: 15px; font-weight: 600; fill: #334155; letter-spacing: 0; }
+      .card { fill: rgba(255,255,255,0.82); stroke: rgba(148,163,184,0.55); stroke-width: 1.4; }
+      .hair { stroke: #94a3b8; stroke-width: 1.3; opacity: 0.45; }
+      .flowBlue { fill: none; stroke: #2563eb; stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#arrowBlue); }
+      .flowTeal { fill: none; stroke: #0f766e; stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#arrowTeal); }
+      .budget { fill: none; stroke: #d97706; stroke-width: 4.5; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#arrowAmber); }
+      .pressure { fill: none; stroke: #e11d48; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 12 10; marker-end: url(#arrowRed); opacity: 0.88; }
+      .faint { opacity: 0.66; }
+    </style>
+  </defs>
+
+  <rect width="1800" height="1080" fill="url(#bgGrad)"/>
+  <rect width="1800" height="1080" fill="url(#grid)" opacity="0.55"/>
+
+  <g transform="translate(78 68)">
+    <text class="title" x="0" y="0" dominant-baseline="hanging">PhaseServe</text>
+    <text class="subtitle" x="4" y="76" dominant-baseline="hanging">Regime-aware pressure-budgeted phase scheduling for prefill/decode-disaggregated LLM serving</text>
+  </g>
+
+  <g transform="translate(1258 73)">
+    <rect x="0" y="0" width="118" height="40" rx="20" fill="#fff7ed" stroke="#fed7aa"/>
+    <text class="chipText" x="59" y="26" text-anchor="middle">PBC</text>
+    <rect x="132" y="0" width="118" height="40" rx="20" fill="#eff6ff" stroke="#bfdbfe"/>
+    <text class="chipText" x="191" y="26" text-anchor="middle">BPS</text>
+    <rect x="264" y="0" width="118" height="40" rx="20" fill="#ecfdf5" stroke="#bbf7d0"/>
+    <text class="chipText" x="323" y="26" text-anchor="middle">KAS</text>
+  </g>
+
+  <rect x="64" y="172" width="1672" height="828" rx="34" fill="rgba(255,255,255,0.64)" stroke="rgba(203,213,225,0.9)" filter="url(#softShadow)"/>
+
+  <!-- Request source -->
+  <g transform="translate(95 280)" filter="url(#smallShadow)">
+    <rect class="card" x="0" y="0" width="190" height="270" rx="22"/>
+    <text class="h3" x="28" y="44">Request stream</text>
+    <text class="small" x="28" y="76">prompt known</text>
+    <text class="small" x="28" y="98">output unknown</text>
+    <text class="small" x="28" y="120">SLO targets</text>
+    <g transform="translate(28 154)">
+      <circle cx="0" cy="0" r="10" fill="#2563eb"/>
+      <rect x="24" y="-9" width="104" height="18" rx="9" fill="#dbeafe"/>
+      <circle cx="0" cy="36" r="10" fill="#0f766e"/>
+      <rect x="24" y="27" width="130" height="18" rx="9" fill="#ccfbf1"/>
+      <circle cx="0" cy="72" r="10" fill="#d97706"/>
+      <rect x="24" y="63" width="83" height="18" rx="9" fill="#fed7aa"/>
+    </g>
+  </g>
+
+  <!-- Prefill side -->
+  <g transform="translate(325 225)" filter="url(#smallShadow)">
+    <rect x="0" y="0" width="445" height="395" rx="28" fill="url(#prefillGrad)" stroke="#bfdbfe" stroke-width="2"/>
+    <text class="section" x="34" y="48">Prefill side</text>
+    <text class="small" x="34" y="78">known prompt cost, bounded admission</text>
+
+    <g transform="translate(34 120)">
+      <rect class="card" x="0" y="0" width="165" height="160" rx="18"/>
+      <text class="h3" x="22" y="36">Waiting</text>
+      <text class="h3" x="22" y="62">prefill queue</text>
+      <rect x="24" y="86" width="112" height="13" rx="7" fill="#93c5fd"/>
+      <rect x="24" y="109" width="84" height="13" rx="7" fill="#38bdf8"/>
+      <rect x="24" y="132" width="124" height="13" rx="7" fill="#60a5fa"/>
+    </g>
+
+    <g transform="translate(235 105)">
+      <rect x="0" y="0" width="176" height="185" rx="22" fill="#ffffff" stroke="#60a5fa" stroke-width="2"/>
+      <rect x="18" y="18" width="58" height="34" rx="17" fill="#2563eb"/>
+      <text x="47" y="41" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="17" font-weight="800" fill="#ffffff">BPS</text>
+      <text class="h3" x="18" y="82">Budgeted</text>
+      <text class="h3" x="18" y="108">prefill shaping</text>
+      <text class="small" x="19" y="139">token budget</text>
+      <text class="small" x="19" y="162">block margin</text>
+    </g>
+
+    <g transform="translate(72 325)">
+      <text class="small" x="0" y="-12">Prefill GPU pool</text>
+      <rect x="0" y="0" width="296" height="42" rx="15" fill="#dbeafe" stroke="#93c5fd"/>
+      <g transform="translate(20 9)">
+        <rect x="0" y="0" width="48" height="24" rx="6" fill="#2563eb" opacity="0.88"/>
+        <rect x="62" y="0" width="48" height="24" rx="6" fill="#0ea5e9" opacity="0.88"/>
+        <rect x="124" y="0" width="48" height="24" rx="6" fill="#2563eb" opacity="0.65"/>
+        <rect x="186" y="0" width="48" height="24" rx="6" fill="#0ea5e9" opacity="0.65"/>
+      </g>
+    </g>
+  </g>
+
+  <!-- Bridge -->
+  <g transform="translate(815 265)" filter="url(#smallShadow)">
+    <rect x="0" y="0" width="255" height="315" rx="28" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+    <text class="section" x="32" y="48">Bridge</text>
+    <text class="small" x="32" y="78">KV handoff and</text>
+    <text class="small" x="32" y="100">first-token boundary</text>
+    <g transform="translate(34 142)">
+      <rect x="0" y="0" width="185" height="64" rx="18" fill="#f1f5f9" stroke="#cbd5e1"/>
+      <text class="small" x="92" y="26" text-anchor="middle">handoff queue</text>
+      <text class="mono" x="92" y="50" text-anchor="middle">q_bridge(t)</text>
+    </g>
+    <g transform="translate(44 234)">
+      <rect x="0" y="0" width="33" height="33" rx="7" fill="#10b981"/>
+      <rect x="43" y="0" width="33" height="33" rx="7" fill="#34d399"/>
+      <rect x="86" y="0" width="33" height="33" rx="7" fill="#a7f3d0"/>
+      <rect x="129" y="0" width="33" height="33" rx="7" fill="#fde68a"/>
+      <text class="tiny" x="81" y="58" text-anchor="middle">KV footprint</text>
+    </g>
+  </g>
+
+  <!-- Decode side -->
+  <g transform="translate(1112 225)" filter="url(#smallShadow)">
+    <rect x="0" y="0" width="585" height="395" rx="28" fill="url(#decodeGrad)" stroke="#99f6e4" stroke-width="2"/>
+    <text class="section" x="34" y="48">Decode side</text>
+    <text class="small" x="34" y="78">unknown output length, KV-constrained progress</text>
+
+    <g transform="translate(34 105)">
+      <rect x="0" y="0" width="225" height="185" rx="22" fill="#ffffff" stroke="#14b8a6" stroke-width="2"/>
+      <rect x="18" y="18" width="58" height="34" rx="17" fill="#0f766e"/>
+      <text x="47" y="41" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" font-size="17" font-weight="800" fill="#ffffff">KAS</text>
+      <text class="h3" x="18" y="82">KV-feasible</text>
+      <text class="h3" x="18" y="108">active-set shaping</text>
+      <text class="small" x="19" y="139">first-decode guard</text>
+      <text class="small" x="19" y="162">completion drain</text>
+    </g>
+
+    <g transform="translate(300 105)">
+      <rect class="card" x="0" y="0" width="245" height="185" rx="22"/>
+      <text class="h3" x="24" y="40">Decode active set</text>
+      <text class="small" x="24" y="70">intensity-controlled utility</text>
+      <g transform="translate(24 103)">
+        <rect x="0" y="0" width="52" height="24" rx="12" fill="#0f766e"/>
+        <rect x="62" y="0" width="52" height="24" rx="12" fill="#14b8a6"/>
+        <rect x="124" y="0" width="52" height="24" rx="12" fill="#5eead4"/>
+        <rect x="0" y="39" width="52" height="24" rx="12" fill="#ccfbf1" stroke="#14b8a6"/>
+        <rect x="62" y="39" width="52" height="24" rx="12" fill="#fef3c7" stroke="#f59e0b"/>
+        <rect x="124" y="39" width="52" height="24" rx="12" fill="#ffe4e6" stroke="#fb7185"/>
+      </g>
+    </g>
+
+    <g transform="translate(92 325)">
+      <text class="small" x="0" y="-12">Decode GPUs + paged KV cache</text>
+      <rect x="0" y="0" width="405" height="42" rx="15" fill="#ccfbf1" stroke="#5eead4"/>
+      <g transform="translate(20 9)">
+        <rect x="0" y="0" width="48" height="24" rx="6" fill="#0f766e" opacity="0.88"/>
+        <rect x="62" y="0" width="48" height="24" rx="6" fill="#0d9488" opacity="0.78"/>
+        <rect x="124" y="0" width="48" height="24" rx="6" fill="#14b8a6" opacity="0.72"/>
+        <rect x="186" y="0" width="48" height="24" rx="6" fill="#5eead4" opacity="0.8"/>
+        <rect x="248" y="0" width="48" height="24" rx="6" fill="#f59e0b" opacity="0.7"/>
+        <rect x="310" y="0" width="48" height="24" rx="6" fill="#fb7185" opacity="0.68"/>
+      </g>
+    </g>
+  </g>
+
+  <!-- Output -->
+  <g transform="translate(1665 385)">
+    <text class="small" x="0" y="-26">tokens</text>
+    <circle cx="0" cy="0" r="9" fill="#0f766e"/>
+    <circle cx="26" cy="0" r="9" fill="#14b8a6"/>
+    <circle cx="52" cy="0" r="9" fill="#5eead4"/>
+    <circle cx="78" cy="0" r="9" fill="#99f6e4"/>
+  </g>
+
+  <!-- Pipeline arrows -->
+  <path class="flowBlue" d="M286 415H354"/>
+  <path class="flowBlue" d="M524 425H556"/>
+  <path class="flowBlue" d="M706 425C748 425 760 425 812 425"/>
+  <path class="flowTeal" d="M1070 425H1146"/>
+  <path class="flowTeal" d="M1372 425H1412"/>
+  <path class="flowTeal" d="M1662 425H1748"/>
+
+  <!-- PBC controller -->
+  <g transform="translate(377 700)" filter="url(#softShadow)">
+    <rect x="0" y="0" width="1048" height="230" rx="30" fill="url(#pbcGrad)" stroke="#fdba74" stroke-width="2.2"/>
+    <text class="h2" x="42" y="50">PBC</text>
+    <text class="section" x="121" y="49">Pressure-Budget Controller</text>
+    <text class="small" x="43" y="84">online pressure observation, regime ownership, typed budget emission</text>
+
+    <g transform="translate(42 118)">
+      <text class="h3" x="0" y="0">Observe pressure</text>
+      <g transform="translate(0 28)">
+        <rect x="0" y="0" width="136" height="32" rx="16" fill="#ffe4e6" stroke="#fb7185"/>
+        <text class="chipText" x="68" y="21" text-anchor="middle">bridge</text>
+        <rect x="148" y="0" width="136" height="32" rx="16" fill="#fef3c7" stroke="#f59e0b"/>
+        <text class="chipText" x="216" y="21" text-anchor="middle">first token</text>
+        <rect x="296" y="0" width="136" height="32" rx="16" fill="#e0f2fe" stroke="#38bdf8"/>
+        <text class="chipText" x="364" y="21" text-anchor="middle">decode q</text>
+        <rect x="0" y="45" width="136" height="32" rx="16" fill="#dcfce7" stroke="#22c55e"/>
+        <text class="chipText" x="68" y="66" text-anchor="middle">KV blocks</text>
+        <rect x="148" y="45" width="136" height="32" rx="16" fill="#fee2e2" stroke="#ef4444"/>
+        <text class="chipText" x="216" y="66" text-anchor="middle">swap</text>
+        <rect x="296" y="45" width="136" height="32" rx="16" fill="#ede9fe" stroke="#8b5cf6"/>
+        <text class="chipText" x="364" y="66" text-anchor="middle">prefill age</text>
+      </g>
+    </g>
+
+    <g transform="translate(520 119)">
+      <rect x="0" y="0" width="188" height="84" rx="20" fill="#ffffff" stroke="#f59e0b" stroke-width="1.8"/>
+      <text class="h3" x="94" y="32" text-anchor="middle">Regime owner</text>
+      <text class="small" x="94" y="60" text-anchor="middle">TTFT / TPOT / KV</text>
+    </g>
+
+    <g transform="translate(768 118)">
+      <text class="h3" x="0" y="0">Emit typed budgets</text>
+      <text class="mono" x="0" y="34">c_prefill_tok</text>
+      <text class="mono" x="0" y="60">m_prefill_blk</text>
+      <text class="mono" x="0" y="86">l_decode_scan</text>
+      <text class="mono" x="190" y="34">s_decode_swap</text>
+      <text class="mono" x="190" y="60">i_decode_util</text>
+      <text class="mono" x="190" y="86">allow_oldest</text>
+    </g>
+
+    <path d="M486 158H508" fill="none" stroke="#f59e0b" stroke-width="3.5" marker-end="url(#arrowAmber)"/>
+    <path d="M717 158H748" fill="none" stroke="#f59e0b" stroke-width="3.5" marker-end="url(#arrowAmber)"/>
+  </g>
+
+  <!-- Budget arrows -->
+  <path class="budget" d="M735 700C690 650 674 595 660 520"/>
+  <path class="budget" d="M1012 700C1052 641 1101 576 1175 500"/>
+  <text class="tiny" x="610" y="664" text-anchor="middle" fill="#d97706">prefill budgets</text>
+  <text class="tiny" x="1144" y="664" text-anchor="middle" fill="#d97706">decode budgets</text>
+
+  <!-- Pressure feedback arrows -->
+  <path class="pressure" d="M928 580C932 628 919 654 882 700"/>
+  <path class="pressure" d="M1510 620C1500 674 1458 710 1394 742"/>
+  <path class="pressure" d="M1256 620C1240 665 1207 692 1155 700"/>
+  <text class="tiny" x="941" y="636" fill="#e11d48">handoff pressure</text>
+  <text class="tiny" x="1395" y="684" fill="#e11d48">KV / swap pressure</text>
+
+  <!-- Bottom callout -->
+  <g transform="translate(95 895)">
+    <rect x="0" y="0" width="230" height="58" rx="20" fill="#ffffff" stroke="#cbd5e1"/>
+    <text class="small" x="24" y="24">Mechanism focus</text>
+    <text class="tiny" x="24" y="43">pressure feedback closes the phase split</text>
+  </g>
+
+  <g transform="translate(1468 888)">
+    <rect x="0" y="0" width="206" height="66" rx="20" fill="#ffffff" stroke="#cbd5e1"/>
+    <text class="small" x="24" y="26">Reported metrics</text>
+    <text class="tiny" x="24" y="47">TTFT, TPOT, SLO attainment</text>
+  </g>
+</svg>

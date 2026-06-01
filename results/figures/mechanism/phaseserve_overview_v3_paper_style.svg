@@ -1,0 +1,184 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="760" viewBox="0 0 1800 760" role="img" aria-labelledby="title desc">
+  <title id="title">PhaseServe paper-style overview</title>
+  <desc id="desc">A paper-style architecture overview for PhaseServe, using flat system boxes and compact labels similar to DistServe, WindServe, and ShuffleInfer overview figures.</desc>
+  <defs>
+    <marker id="arrowBlack" markerWidth="11" markerHeight="11" refX="9" refY="5.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M1 1L10 5.5L1 10Z" fill="#111827"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="11" markerHeight="11" refX="9" refY="5.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M1 1L10 5.5L1 10Z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrowOrange" markerWidth="11" markerHeight="11" refX="9" refY="5.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M1 1L10 5.5L1 10Z" fill="#c76b00"/>
+    </marker>
+    <marker id="arrowRed" markerWidth="11" markerHeight="11" refX="9" refY="5.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M1 1L10 5.5L1 10Z" fill="#d21f3c"/>
+    </marker>
+    <style>
+      .t { font-family: Arial, Helvetica, sans-serif; letter-spacing: 0; }
+      .title { font-family: Arial, Helvetica, sans-serif; font-size: 25px; font-weight: 700; fill: #111827; }
+      .h { font-family: Arial, Helvetica, sans-serif; font-size: 22px; font-weight: 700; fill: #111827; }
+      .m { font-family: Arial, Helvetica, sans-serif; font-size: 18px; font-weight: 600; fill: #111827; }
+      .s { font-family: Arial, Helvetica, sans-serif; font-size: 16px; font-weight: 500; fill: #334155; }
+      .xs { font-family: Arial, Helvetica, sans-serif; font-size: 14px; font-weight: 600; fill: #475569; }
+      .panel { fill: #ffffff; stroke: #111827; stroke-width: 1.6; }
+      .ctl { fill: #d9e2f3; stroke: #111827; stroke-width: 1.4; }
+      .prefill { fill: #fff2cc; stroke: #111827; stroke-width: 1.4; }
+      .decode { fill: #ddebf7; stroke: #111827; stroke-width: 1.4; }
+      .bridge { fill: #eeeeee; stroke: #111827; stroke-width: 1.4; }
+      .inner { fill: #ffffff; stroke: #111827; stroke-width: 1.1; }
+      .kv { fill: #e2f0d9; stroke: #111827; stroke-width: 1.0; }
+      .warn { fill: #fde8ec; stroke: #d21f3c; stroke-width: 1.3; }
+      .data { fill: none; stroke: #111827; stroke-width: 2.2; marker-end: url(#arrowBlack); }
+      .blue { fill: none; stroke: #2563eb; stroke-width: 2.2; marker-end: url(#arrowBlue); }
+      .budget { fill: none; stroke: #c76b00; stroke-width: 2.4; marker-end: url(#arrowOrange); }
+      .pressure { fill: none; stroke: #d21f3c; stroke-width: 2.2; stroke-dasharray: 8 6; marker-end: url(#arrowRed); }
+      .thin { fill: none; stroke: #64748b; stroke-width: 1.3; }
+    </style>
+  </defs>
+
+  <rect width="1800" height="760" fill="#ffffff"/>
+
+  <!-- Left subfigure: compact problem inset, not a full baseline/proposed comparison. -->
+  <g transform="translate(55 64)">
+    <rect class="panel" x="0" y="0" width="425" height="565"/>
+    <text class="title" x="26" y="42">(a) Pressure after split</text>
+
+    <g transform="translate(56 100)">
+      <rect class="prefill" x="0" y="0" width="125" height="92"/>
+      <text class="m" x="62" y="34" text-anchor="middle">Prefill</text>
+      <text class="s" x="62" y="62" text-anchor="middle">FCFS</text>
+      <rect x="28" y="72" width="70" height="10" fill="#9dc3e6"/>
+    </g>
+    <g transform="translate(244 100)">
+      <rect class="decode" x="0" y="0" width="125" height="92"/>
+      <text class="m" x="62" y="34" text-anchor="middle">Decode</text>
+      <text class="s" x="62" y="62" text-anchor="middle">FCFS</text>
+      <rect x="28" y="72" width="70" height="10" fill="#70ad47"/>
+    </g>
+    <path class="data" d="M181 146H238"/>
+    <text class="xs" x="210" y="132" text-anchor="middle">KV handoff</text>
+
+    <g transform="translate(54 262)">
+      <rect class="warn" x="0" y="0" width="316" height="116"/>
+      <text class="m" x="20" y="34">Downstream pressure</text>
+      <text class="s" x="20" y="66">bridge queue / first-token wait</text>
+      <text class="s" x="20" y="94">decode backlog / KV / swap</text>
+    </g>
+    <path class="pressure" d="M308 193V254"/>
+    <path class="pressure" d="M118 193C118 225 139 244 166 260"/>
+
+    <g transform="translate(54 430)">
+      <text class="m" x="0" y="0">Observation</text>
+      <text class="s" x="0" y="34">The phases are separated,</text>
+      <text class="s" x="0" y="62">but bridge, first-token,</text>
+      <text class="s" x="0" y="90">KV, and swap pressure remain.</text>
+    </g>
+  </g>
+
+  <!-- Right subfigure: paper-style system architecture. -->
+  <g transform="translate(520 64)">
+    <rect class="panel" x="0" y="0" width="1225" height="565"/>
+    <text class="title" x="26" y="42">(b) PhaseServe architecture</text>
+
+    <!-- Control plane. -->
+    <g transform="translate(360 78)">
+      <rect class="ctl" x="0" y="0" width="520" height="95"/>
+      <text class="h" x="24" y="35">PBC</text>
+      <text class="m" x="90" y="35">Pressure-budget controller</text>
+      <g transform="translate(24 54)">
+        <rect class="inner" x="0" y="0" width="145" height="28"/>
+        <text class="xs" x="72" y="19" text-anchor="middle">Pressure monitor</text>
+        <rect class="inner" x="174" y="0" width="145" height="28"/>
+        <text class="xs" x="246" y="19" text-anchor="middle">Regime owner</text>
+        <rect class="inner" x="348" y="0" width="145" height="28"/>
+        <text class="xs" x="420" y="19" text-anchor="middle">Budget mapper</text>
+      </g>
+    </g>
+
+    <!-- Requests. -->
+    <g transform="translate(42 265)">
+      <text class="h" x="0" y="0">Requests</text>
+      <text class="s" x="0" y="30">prompt known</text>
+      <text class="s" x="0" y="56">output unknown</text>
+      <rect x="0" y="86" width="118" height="12" fill="#9dc3e6"/>
+      <rect x="0" y="126" width="88" height="12" fill="#70ad47"/>
+    </g>
+
+    <!-- Prefill instance. -->
+    <g transform="translate(250 210)">
+      <rect class="prefill" x="0" y="0" width="250" height="230"/>
+      <text class="h" x="18" y="34">Prefill Instance</text>
+      <rect class="inner" x="18" y="58" width="214" height="36"/>
+      <text class="s" x="125" y="82" text-anchor="middle">Waiting Queue</text>
+      <rect class="inner" x="18" y="108" width="100" height="42"/>
+      <text class="m" x="68" y="136" text-anchor="middle">BPS</text>
+      <rect class="inner" x="132" y="108" width="100" height="42"/>
+      <text class="s" x="182" y="128" text-anchor="middle">token/block</text>
+      <text class="s" x="182" y="146" text-anchor="middle">budget gates</text>
+      <rect class="kv" x="18" y="166" width="214" height="42"/>
+      <text class="s" x="125" y="192" text-anchor="middle">Buckets + protected oldest</text>
+    </g>
+
+    <!-- Bridge. -->
+    <g transform="translate(562 210)">
+      <rect class="bridge" x="0" y="0" width="210" height="230"/>
+      <text class="h" x="20" y="34">Bridge</text>
+      <rect class="inner" x="20" y="58" width="170" height="42"/>
+      <text class="s" x="105" y="84" text-anchor="middle">KV handoff queue</text>
+      <rect class="inner" x="20" y="116" width="170" height="42"/>
+      <text class="s" x="105" y="142" text-anchor="middle">First-decode admission</text>
+      <g transform="translate(28 181)">
+        <rect x="0" y="0" width="31" height="22" fill="#00b050"/>
+        <rect x="43" y="0" width="31" height="22" fill="#70ad47"/>
+        <rect x="86" y="0" width="31" height="22" fill="#a9d18e"/>
+        <rect x="129" y="0" width="31" height="22" fill="#d9e2f3"/>
+      </g>
+    </g>
+
+    <!-- Decode instance. -->
+    <g transform="translate(835 210)">
+      <rect class="decode" x="0" y="0" width="315" height="230"/>
+      <text class="h" x="20" y="34">Decode Instance</text>
+      <rect class="inner" x="20" y="58" width="126" height="62"/>
+      <text class="m" x="83" y="94" text-anchor="middle">KAS</text>
+      <rect class="inner" x="166" y="58" width="126" height="62"/>
+      <text class="s" x="229" y="82" text-anchor="middle">Active set</text>
+      <text class="s" x="229" y="104" text-anchor="middle">selection</text>
+      <rect class="kv" x="20" y="140" width="272" height="68"/>
+      <text class="s" x="156" y="164" text-anchor="middle">Hard gates before utility</text>
+      <text class="s" x="156" y="188" text-anchor="middle">KV append / swap / batch</text>
+      <text class="xs" x="156" y="222" text-anchor="middle">short FCFS / long KAS; conditional drain</text>
+    </g>
+
+    <!-- Main data path. -->
+    <path class="data" d="M175 347H242"/>
+    <path class="data" d="M500 347H555"/>
+    <path class="data" d="M772 347H828"/>
+    <path class="data" d="M1150 347H1192"/>
+    <text class="xs" x="1174" y="325">tokens</text>
+
+    <!-- Pressure observations: straight dashed paths upward. -->
+    <path class="pressure" d="M655 210V175H520"/>
+    <path class="pressure" d="M995 210V175H760"/>
+    <text class="xs" x="755" y="192" fill="#d21f3c">pressure observations</text>
+
+    <!-- Budgets: downward elbows to receiving modules. -->
+    <path class="budget" d="M460 173V194H375V205"/>
+    <path class="budget" d="M620 173V196H665V205"/>
+    <path class="budget" d="M830 173V196H992V205"/>
+    <text class="xs" x="310" y="188" fill="#c76b00">prefill budget</text>
+    <text class="xs" x="650" y="188" fill="#c76b00">bridge admission</text>
+    <text class="xs" x="980" y="188" fill="#c76b00">decode budget</text>
+
+    <!-- Compact legend. -->
+    <g transform="translate(40 515)">
+      <path class="data" d="M0 0H42"/>
+      <text class="xs" x="58" y="5">request/KV path</text>
+      <path class="pressure" d="M190 0H232"/>
+      <text class="xs" x="248" y="5">pressure</text>
+      <path class="budget" d="M355 0H397"/>
+      <text class="xs" x="413" y="5">budget</text>
+    </g>
+  </g>
+</svg>

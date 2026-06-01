@@ -22,9 +22,10 @@ that the code does not implement. The current implementation includes:
 - near-completion promotion to release KV without violating first-token
   ownership.
 
-The main remaining gaps are validation gaps: multi-seed replication, final
-ablation under the latest defaults, LLaMA2-13B replication, and clean result
-indexing.
+The main remaining gaps are now presentation and final-audit gaps: the current
+two-seed Stage 4O matrix, targeted Stage 4P ablation, and result indexing are in
+place, but the paper still needs final plot-window/SLO decisions, independent
+review, and full claim-evidence audit.
 
 ## Current Method Contract
 
@@ -124,15 +125,14 @@ Currently supported as working claims:
 1. PhaseServe has an implemented typed pressure-budget control path rather than
    a loose collection of independent heuristics.
 2. BPS and KAS are connected through PBC budgets and conflict ownership.
-3. OPT-13B + ShareGPT seed0 reaches a strict internal latency window on the
-   latest code: per-GPU `1.0-3.0 req/s/GPU`, `0.5` granularity, with at least
-   two TTFT and two TPOT percentiles improving by `>=20%` at each point.
-4. LLaMA2-13B + LongBench 4K shows strong TTFT and TPOT improvements on the
-   latest code, with clear low-rate SLO gains and high-rate latency gains.
-5. LLaMA2-13B + ShareGPT shows positive generalization, but TPOT p99 is not
-   stable enough for the main claim.
-6. Stage 4C ablation supports distinct roles for BPS, KAS, and dynamic PBC, but
-   final ablation still needs to be rerun under the latest defaults.
+3. Stage 4O provides the current two-seed end-to-end matrix for OPT-13B +
+   ShareGPT, LLaMA2-13B + ShareGPT, and LLaMA2-13B + LongBench 4K.
+4. Stage 4Q provides the current draft main latency windows: TTFT `p50/p90` and
+   TPOT `p90/p95` over selected pressure windows.
+5. Stage 4P provides the current final targeted OPT component ablation for
+   `w/o PBC`, `w/o BPS`, and `w/o KAS` over seed0 + seed1.
+6. TPOT p99 remains tradeoff-sensitive and should be treated as a boundary or
+   secondary metric unless later evidence stabilizes it.
 
 ## Claims To Avoid
 
@@ -149,10 +149,9 @@ Do not claim:
 
 | Gap | Why it matters | Required action |
 |---|---|---|
-| Seed expansion | Main seed policy is now seed0 + seed1. | Treat Stage 4M seed1 as the second main seed; keep seed2 only as internal diagnostic evidence. |
-| Final ablation | Current strongest ablation is older than the latest bridge-budgeted defaults. | Run `fcfs`, `phase`, `w/o PBC`, `w/o BPS`, `w/o KAS`, and optional length-aware baseline. |
-| LLaMA replication | Needed to show the mechanism is not OPT-specific. | Add at least one more seed for LLaMA2-13B + ShareGPT and LongBench. |
-| Mechanism figures | Needed to distinguish PBC/BPS/KAS from size-aware batching or LAS. | Extract budget timelines, regime shares, bridge queue, pad waste, and KV/swap metrics. |
+| Plot/SLO freeze | Main latency windows are drafted; SLO presentation is not frozen. | Use `docs/claim_evidence_audit.md` and `docs/final_results_index.md` before adding or changing claims. |
+| Independent review | Major paper sections have been rewritten. | Run reviewer-style pass before treating the draft as stable. |
+| Mechanism diagnostics | Mechanism figures are image-generated; some low-level counters are not in main text. | Extract budget timelines/regime shares only if the final narrative needs additional mechanism evidence. |
 | Result hygiene | Many remote tuning roots remain. | Cite only roots listed in `docs/final_results_index.md`. |
 
 ## Paper-Framing Guidance

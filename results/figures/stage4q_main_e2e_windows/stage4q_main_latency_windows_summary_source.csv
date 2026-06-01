@@ -1,0 +1,185 @@
+combo,combo_title,metric_family,metric,percentile,policy,policy_label,per_gpu_rate,mean,min,max,unit,window_low,window_high
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_median,p50,fcfs,DistServe,1.0,0.1026775524951517,0.0987269394099712,0.1066281655803322,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_median,p50,fcfs,DistServe,1.25,1.5905740256421268,1.3221225924789906,1.859025458805263,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_median,p50,fcfs,DistServe,1.5,5.656254334375262,5.52898577041924,5.7835228983312845,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_median,p50,fcfs,DistServe,1.75,8.368693170137703,8.302761488594115,8.434624851681292,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_median,p50,fcfs,DistServe,2.0,10.37984253372997,10.162601978518069,10.597083088941872,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_median,p50,fcfs,DistServe,2.25,11.89466355741024,11.633861616253853,12.155465498566628,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_median,p50,fcfs,DistServe,2.5,13.15504388557747,12.8838149914518,13.42627277970314,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_median,p50,fcfs,DistServe,2.75,14.086053457576782,13.782372486777604,14.38973442837596,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_median,p50,phase,PhaseServe,1.0,0.07624009763821954,0.0761917531490325,0.0762884421274066,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_median,p50,phase,PhaseServe,1.25,0.0935290339402854,0.080260588787496,0.1067974790930748,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_median,p50,phase,PhaseServe,1.5,0.19423381844535464,0.1218213094398379,0.2666463274508714,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_median,p50,phase,PhaseServe,1.75,2.295391066465527,0.1311582596972584,4.459623873233795,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_median,p50,phase,PhaseServe,2.0,2.782723401673138,0.33354486618191,5.231901937164366,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_median,p50,phase,PhaseServe,2.25,5.083496257197112,1.287208080291748,8.879784434102476,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_median,p50,phase,PhaseServe,2.5,6.109540783334523,1.9048712886869907,10.314210277982056,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_median,p50,phase,PhaseServe,2.75,6.618393471464514,2.6005114410072565,10.636275501921771,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_p90,p90,fcfs,DistServe,1.0,3.520976383704692,0.3317692017182707,6.710183565691113,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_p90,p90,fcfs,DistServe,1.25,13.779723551589996,12.279969735071065,15.279477368108928,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_p90,p90,fcfs,DistServe,1.5,20.314524863753466,19.61515346933156,21.01389625817537,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_p90,p90,fcfs,DistServe,1.75,24.972482741996643,24.765121002495285,25.179844481498005,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_p90,p90,fcfs,DistServe,2.0,28.5464476452209,28.458851283602417,28.63404400683939,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_p90,p90,fcfs,DistServe,2.25,31.452537847496565,31.1900267675519,31.71504892744123,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_p90,p90,fcfs,DistServe,2.5,33.81956032607704,33.31410157401115,34.32501907814293,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_p90,p90,fcfs,DistServe,2.75,35.80376905659213,35.212145655788476,36.39539245739578,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_p90,p90,phase,PhaseServe,1.0,0.1995632933452725,0.1946213413029909,0.2045052453875541,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_p90,p90,phase,PhaseServe,1.25,1.5467551308684044,0.3636417403817176,2.7298685213550913,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_p90,p90,phase,PhaseServe,1.5,7.8691978079266836,5.868790913373232,9.869604702480135,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_p90,p90,phase,PhaseServe,1.75,14.865443497989325,9.8055676497519,19.92531934622675,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_p90,p90,phase,PhaseServe,2.0,20.385649105906484,14.65514587368816,26.11615233812481,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_p90,p90,phase,PhaseServe,2.25,21.786480248533188,17.70976184029132,25.863198656775054,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_p90,p90,phase,PhaseServe,2.5,23.614441412035376,19.66375403292477,27.56512879114598,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,ttft,ttft_s_p90,p90,phase,PhaseServe,2.75,27.635425754264,22.361619628407063,32.909231880120934,s,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p90,p90,fcfs,DistServe,1.0,1.244242678341371,1.2073117952624504,1.2811735614202917,s/token,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p90,p90,fcfs,DistServe,1.25,1.5652709430150153,1.523230395559221,1.6073114904708097,s/token,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p90,p90,fcfs,DistServe,1.5,1.7944433779693993,1.794252561279996,1.7946341946588027,s/token,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p90,p90,fcfs,DistServe,1.75,1.8590007479459818,1.81993068576875,1.8980708101232135,s/token,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p90,p90,fcfs,DistServe,2.0,1.8924942263643942,1.829125112769278,1.9558633399595104,s/token,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p90,p90,fcfs,DistServe,2.25,1.8987593606127686,1.8385031635500484,1.9590155576754889,s/token,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p90,p90,fcfs,DistServe,2.5,1.9095838194979087,1.8732047697529195,1.945962869242898,s/token,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p90,p90,fcfs,DistServe,2.75,1.9199908811545794,1.8974978888034817,1.942483873505677,s/token,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p90,p90,phase,PhaseServe,1.0,0.2858315830607898,0.2627646948909387,0.3088984712306409,s/token,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p90,p90,phase,PhaseServe,1.25,0.8366692950141925,0.7001088995734849,0.9732296904549,s/token,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p90,p90,phase,PhaseServe,1.5,1.039406695772583,0.9500383520592,1.128775039485966,s/token,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p90,p90,phase,PhaseServe,1.75,1.201800355892205,1.091992572862655,1.311608138921755,s/token,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p90,p90,phase,PhaseServe,2.0,1.2453548186216947,1.2342133612309891,1.2564962760124,s/token,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p90,p90,phase,PhaseServe,2.25,1.3400720451062431,1.2662951219050833,1.413848968307403,s/token,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p90,p90,phase,PhaseServe,2.5,1.307791299193373,1.2292906940449029,1.386291904341843,s/token,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p90,p90,phase,PhaseServe,2.75,1.2622181782700737,1.1653923017748935,1.359044054765254,s/token,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p95,p95,fcfs,DistServe,1.0,2.1447493236906094,2.002852738818287,2.2866459085629325,s/token,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p95,p95,fcfs,DistServe,1.25,2.6853758310566547,2.422630524603717,2.948121137509592,s/token,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p95,p95,fcfs,DistServe,1.5,2.787445762377856,2.533345727678389,3.041545797077323,s/token,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p95,p95,fcfs,DistServe,1.75,2.954419835784166,2.8292002216167784,3.0796394499515536,s/token,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p95,p95,fcfs,DistServe,2.0,3.0463012377483185,2.947605131808672,3.144997343687965,s/token,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p95,p95,fcfs,DistServe,2.25,3.031096882230295,2.8514955319277977,3.2106982325327915,s/token,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p95,p95,fcfs,DistServe,2.5,3.030862942300739,2.792740478068593,3.2689854065328854,s/token,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p95,p95,fcfs,DistServe,2.75,3.0217576042003955,2.799813427925113,3.2437017804756776,s/token,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p95,p95,phase,PhaseServe,1.0,0.42791659647482466,0.3755761424428784,0.4802570505067709,s/token,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p95,p95,phase,PhaseServe,1.25,1.3374039995397045,1.2445605742279442,1.430247424851465,s/token,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p95,p95,phase,PhaseServe,1.5,1.7587107097898214,1.646771571808496,1.8706498477711464,s/token,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p95,p95,phase,PhaseServe,1.75,1.845463400007696,1.8247051289787397,1.866221671036652,s/token,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p95,p95,phase,PhaseServe,2.0,2.0353209189471926,2.0024627133006505,2.068179124593735,s/token,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p95,p95,phase,PhaseServe,2.25,2.1867982606240557,1.9799171055550688,2.3936794156930428,s/token,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p95,p95,phase,PhaseServe,2.5,2.10740134909167,1.8865857425192385,2.328216955664102,s/token,1.0,2.75
+opt13b_sharegpt,OPT-13B + ShareGPT,tpot,tpot_s_p95,p95,phase,PhaseServe,2.75,2.1630553053024553,1.9375680409371856,2.3885425696677247,s/token,1.0,2.75
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,ttft,ttft_s_median,p50,fcfs,DistServe,1.0,0.13291576458141205,0.1312603252008557,0.1345712039619684,s,1.0,2.25
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,ttft,ttft_s_median,p50,fcfs,DistServe,1.25,0.5626434599980712,0.1779748164117336,0.9473121035844088,s,1.0,2.25
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,ttft,ttft_s_median,p50,fcfs,DistServe,1.5,2.8570982650853693,2.266365695744753,3.447830834425986,s,1.0,2.25
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,ttft,ttft_s_median,p50,fcfs,DistServe,1.75,5.070969608612359,4.788489315658808,5.353449901565909,s,1.0,2.25
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,ttft,ttft_s_median,p50,fcfs,DistServe,2.0,6.676280114799738,6.267332423478365,7.085227806121111,s,1.0,2.25
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,ttft,ttft_s_median,p50,fcfs,DistServe,2.25,8.013504804112017,7.402815753594041,8.624193854629993,s,1.0,2.25
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,ttft,ttft_s_median,p50,phase,PhaseServe,1.0,0.10229092556983224,0.0939714526757597,0.1106103984639048,s,1.0,2.25
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,ttft,ttft_s_median,p50,phase,PhaseServe,1.25,0.32412845036014915,0.1343654869124293,0.513891413807869,s,1.0,2.25
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,ttft,ttft_s_median,p50,phase,PhaseServe,1.5,0.28534167958423495,0.1615199316293001,0.4091634275391698,s,1.0,2.25
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,ttft,ttft_s_median,p50,phase,PhaseServe,1.75,1.1900843321345747,0.1714277816936373,2.208740882575512,s,1.0,2.25
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,ttft,ttft_s_median,p50,phase,PhaseServe,2.0,1.939155244268477,0.235234229825437,3.643076258711517,s,1.0,2.25
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,ttft,ttft_s_median,p50,phase,PhaseServe,2.25,2.986146113369614,0.6420449251309037,5.330247301608324,s,1.0,2.25
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,ttft,ttft_s_p90,p90,fcfs,DistServe,1.0,12.64364718971774,10.962863157875836,14.324431221559642,s,1.0,2.25
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,ttft,ttft_s_p90,p90,fcfs,DistServe,1.25,22.352746533509347,21.73115761950612,22.97433544751257,s,1.0,2.25
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,ttft,ttft_s_p90,p90,fcfs,DistServe,1.5,28.924985660798846,28.86773225124925,28.98223907034844,s,1.0,2.25
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,ttft,ttft_s_p90,p90,fcfs,DistServe,1.75,33.902542958036065,33.42799233645201,34.37709357962012,s,1.0,2.25
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,ttft,ttft_s_p90,p90,fcfs,DistServe,2.0,37.47018913384527,36.65670122075826,38.28367704693227,s,1.0,2.25
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,ttft,ttft_s_p90,p90,fcfs,DistServe,2.25,40.302121941652146,39.04279140997678,41.56145247332751,s,1.0,2.25
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,ttft,ttft_s_p90,p90,phase,PhaseServe,1.0,1.078612679988146,0.2487889256328344,1.9084364343434572,s,1.0,2.25
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,ttft,ttft_s_p90,p90,phase,PhaseServe,1.25,12.306059155333786,7.85006877016276,16.76204954050481,s,1.0,2.25
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,ttft,ttft_s_p90,p90,phase,PhaseServe,1.5,19.357607003673905,14.186243183910843,24.528970823436964,s,1.0,2.25
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,ttft,ttft_s_p90,p90,phase,PhaseServe,1.75,25.294156322721392,19.62254557274282,30.96576707269996,s,1.0,2.25
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,ttft,ttft_s_p90,p90,phase,PhaseServe,2.0,26.962720054294913,22.188672551512717,31.736767557077105,s,1.0,2.25
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,ttft,ttft_s_p90,p90,phase,PhaseServe,2.25,32.87437011385337,27.945613557845352,37.80312666986138,s,1.0,2.25
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,tpot,tpot_s_p90,p90,fcfs,DistServe,0.75,0.7674637839262499,0.6243503320782187,0.9105772357742812,s/token,0.75,2.0
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,tpot,tpot_s_p90,p90,fcfs,DistServe,1.0,1.1621022399476564,1.1368449749534617,1.1873595049418508,s/token,0.75,2.0
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,tpot,tpot_s_p90,p90,fcfs,DistServe,1.25,1.3104569956742655,1.29839263599151,1.322521355357021,s/token,0.75,2.0
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,tpot,tpot_s_p90,p90,fcfs,DistServe,1.5,1.4599666890541374,1.4046556782328454,1.5152776998754294,s/token,0.75,2.0
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,tpot,tpot_s_p90,p90,fcfs,DistServe,1.75,1.4543636953659105,1.4043834769575356,1.5043439137742851,s/token,0.75,2.0
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,tpot,tpot_s_p90,p90,fcfs,DistServe,2.0,1.454552650072227,1.4017213286172885,1.5073839715271655,s/token,0.75,2.0
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,tpot,tpot_s_p90,p90,phase,PhaseServe,0.75,0.15284256522555376,0.1528180694808184,0.1528670609702891,s/token,0.75,2.0
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,tpot,tpot_s_p90,p90,phase,PhaseServe,1.0,0.6453895320564588,0.5327376060071398,0.7580414581057777,s/token,0.75,2.0
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,tpot,tpot_s_p90,p90,phase,PhaseServe,1.25,0.8771359785654599,0.8032780985821923,0.9509938585487274,s/token,0.75,2.0
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,tpot,tpot_s_p90,p90,phase,PhaseServe,1.5,0.949615618684212,0.8795043552613114,1.0197268821071126,s/token,0.75,2.0
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,tpot,tpot_s_p90,p90,phase,PhaseServe,1.75,0.989722616137511,0.9252564711133816,1.0541887611616405,s/token,0.75,2.0
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,tpot,tpot_s_p90,p90,phase,PhaseServe,2.0,1.0985696247415508,0.9970469818665424,1.2000922676165595,s/token,0.75,2.0
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,tpot,tpot_s_p95,p95,fcfs,DistServe,0.75,1.4273831235660093,1.330987695051978,1.5237785520800406,s/token,0.75,2.0
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,tpot,tpot_s_p95,p95,fcfs,DistServe,1.0,2.1776806958728585,2.0053843985622146,2.3499769931835024,s/token,0.75,2.0
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,tpot,tpot_s_p95,p95,fcfs,DistServe,1.25,2.46117018581782,2.164795656998953,2.7575447146366874,s/token,0.75,2.0
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,tpot,tpot_s_p95,p95,fcfs,DistServe,1.5,2.4595296317137163,2.1440335135596493,2.7750257498677833,s/token,0.75,2.0
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,tpot,tpot_s_p95,p95,fcfs,DistServe,1.75,2.4897792093817976,2.1957730895994856,2.78378532916411,s/token,0.75,2.0
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,tpot,tpot_s_p95,p95,fcfs,DistServe,2.0,2.5775965042950393,2.365010598450901,2.7901824101391774,s/token,0.75,2.0
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,tpot,tpot_s_p95,p95,phase,PhaseServe,0.75,0.27717254655125245,0.2664601187035442,0.2878849743989607,s/token,0.75,2.0
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,tpot,tpot_s_p95,p95,phase,PhaseServe,1.0,1.1365010690197912,0.9456502706775528,1.3273518673620297,s/token,0.75,2.0
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,tpot,tpot_s_p95,p95,phase,PhaseServe,1.25,1.5786787134657312,1.2765155909862371,1.8808418359452252,s/token,0.75,2.0
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,tpot,tpot_s_p95,p95,phase,PhaseServe,1.5,1.924250053823151,1.6494519198685884,2.1990481877777137,s/token,0.75,2.0
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,tpot,tpot_s_p95,p95,phase,PhaseServe,1.75,2.213280624344372,2.1945148062364543,2.232046442452289,s/token,0.75,2.0
+llama13b_sharegpt,LLaMA2-13B + ShareGPT,tpot,tpot_s_p95,p95,phase,PhaseServe,2.0,2.196470000580666,2.1277254723074575,2.2652145288538743,s/token,0.75,2.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_median,p50,fcfs,DistServe,1.0,32.48376797931269,28.43768939096481,36.52984656766057,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_median,p50,fcfs,DistServe,1.25,35.93768556509167,31.94820596743375,39.92716516274959,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_median,p50,fcfs,DistServe,1.5,38.079056930262595,34.18002950306982,41.97808435745537,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_median,p50,fcfs,DistServe,1.75,40.103966808877885,36.449515517801046,43.75841809995472,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_median,p50,fcfs,DistServe,2.0,41.64695967454463,38.2374620474875,45.05645730160177,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_median,p50,fcfs,DistServe,2.25,43.04233763506636,39.72991789225489,46.35475737787783,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_median,p50,fcfs,DistServe,2.5,44.06363338464871,40.72723922599107,47.40002754330635,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_median,p50,fcfs,DistServe,2.75,44.9866561521776,41.76134864985943,48.211963654495776,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_median,p50,fcfs,DistServe,3.0,45.654177197255194,42.48542472068221,48.822929673828185,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_median,p50,phase,PhaseServe,1.0,11.847441814374179,9.595282199792564,14.099601428955792,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_median,p50,phase,PhaseServe,1.25,15.73537315428257,13.054844861850142,18.415901446714997,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_median,p50,phase,PhaseServe,1.5,18.432610602583736,15.583718506619334,21.281502698548135,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_median,p50,phase,PhaseServe,1.75,20.401434877421707,17.40962003916502,23.39324971567839,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_median,p50,phase,PhaseServe,2.0,22.103447184432298,19.20646103657782,25.000433332286775,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_median,p50,phase,PhaseServe,2.25,23.43685037875548,20.6426772903651,26.23102346714586,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_median,p50,phase,PhaseServe,2.5,24.52964975265786,21.780562648549676,27.278736856766045,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_median,p50,phase,PhaseServe,2.75,25.396221848670393,22.76902613323182,28.023417564108968,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_median,p50,phase,PhaseServe,3.0,26.081611797213554,23.476004315540195,28.68721927888691,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_p90,p90,fcfs,DistServe,1.0,50.53187590604648,48.684498308226466,52.379253503866494,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_p90,p90,fcfs,DistServe,1.25,58.05972260795534,55.48720801435411,60.63223720155656,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_p90,p90,fcfs,DistServe,1.5,62.93185394676402,59.802315063774586,66.06139282975346,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_p90,p90,fcfs,DistServe,1.75,66.75079870363697,63.56759840901941,69.93399899825454,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_p90,p90,fcfs,DistServe,2.0,69.52859439142048,66.40877133887261,72.64841744396836,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_p90,p90,fcfs,DistServe,2.25,71.75449298322201,68.66452289372683,74.84446307271719,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_p90,p90,fcfs,DistServe,2.5,73.55312614375725,70.36567155551165,76.74058073200285,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_p90,p90,fcfs,DistServe,2.75,75.06109149986878,71.95046229939908,78.17172070033848,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_p90,p90,fcfs,DistServe,3.0,76.2177007785067,73.10354225616902,79.33185930084437,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_p90,p90,phase,PhaseServe,1.0,28.88440788909793,28.600549140945077,29.16826663725078,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_p90,p90,phase,PhaseServe,1.25,36.868098319508135,36.09039209783077,37.6458045411855,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_p90,p90,phase,PhaseServe,1.5,42.02994334837422,40.67916850466281,43.380718192085624,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_p90,p90,phase,PhaseServe,1.75,45.72890467196703,44.07811124622822,47.37969809770584,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_p90,p90,phase,PhaseServe,2.0,48.61787596810609,46.962593174539506,50.27315876167267,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_p90,p90,phase,PhaseServe,2.25,50.87760450551286,49.23142929933965,52.523779711686075,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_p90,p90,phase,PhaseServe,2.5,52.66120315110311,51.0509289521724,54.27147735003382,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_p90,p90,phase,PhaseServe,2.75,54.12112575490028,52.59185288567096,55.65039862412959,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,ttft,ttft_s_p90,p90,phase,PhaseServe,3.0,55.2710440531373,53.73742813616991,56.804659970104694,s,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p90,p90,fcfs,DistServe,1.0,2.672699010372162,2.6430613517761232,2.7023366689682007,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p90,p90,fcfs,DistServe,1.25,2.732553120718027,2.6520505738755067,2.8130556675605476,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p90,p90,fcfs,DistServe,1.5,2.800265390914865,2.6456192553043367,2.954911526525393,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p90,p90,fcfs,DistServe,1.75,2.7969332221740237,2.6453855993847055,2.948480844963342,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p90,p90,fcfs,DistServe,2.0,2.795499115499357,2.6431061108907064,2.9478921201080084,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p90,p90,fcfs,DistServe,2.25,2.7936708888349435,2.6426386122281356,2.9447031654417515,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p90,p90,fcfs,DistServe,2.5,2.7951501260589193,2.646604457559685,2.943695794558153,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p90,p90,fcfs,DistServe,2.75,2.7935184221947567,2.6428588608279826,2.9441779835615307,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p90,p90,fcfs,DistServe,3.0,2.795630129651787,2.646178283294042,2.945081976009533,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p90,p90,phase,PhaseServe,1.0,0.8577721819850719,0.8485046156889035,0.8670397482812404,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p90,p90,phase,PhaseServe,1.25,0.9212468480380873,0.8645074224099517,0.9779862736662228,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p90,p90,phase,PhaseServe,1.5,0.8782580184051767,0.8671688362956047,0.8893472005147487,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p90,p90,phase,PhaseServe,1.75,0.8882960516959428,0.8665553290396929,0.9100367743521928,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p90,p90,phase,PhaseServe,2.0,0.897918229107745,0.8683250332251191,0.9275114249903708,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p90,p90,phase,PhaseServe,2.25,0.897250779531896,0.8689705293625594,0.9255310297012328,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p90,p90,phase,PhaseServe,2.5,0.8983450251165777,0.8708606075495482,0.9258294426836072,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p90,p90,phase,PhaseServe,2.75,0.8936867959331721,0.8626815930008889,0.9246919988654554,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p90,p90,phase,PhaseServe,3.0,0.8986398368841038,0.8680470133200288,0.9292326604481786,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p95,p95,fcfs,DistServe,1.0,5.967900953954086,5.419239016715437,6.516562891192734,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p95,p95,fcfs,DistServe,1.25,5.988869367167354,5.43865424930118,6.539084485033527,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p95,p95,fcfs,DistServe,1.5,5.940183621481992,5.4252577412407845,6.4551095017232,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p95,p95,fcfs,DistServe,1.75,5.937150224810466,5.427496317774057,6.446804131846875,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p95,p95,fcfs,DistServe,2.0,5.928592491080053,5.4189007722307,6.438284209929407,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p95,p95,fcfs,DistServe,2.25,5.9231637448538095,5.418607363943011,6.427720125764608,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p95,p95,fcfs,DistServe,2.5,5.936938433791511,5.437778119929135,6.436098747653887,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p95,p95,fcfs,DistServe,2.75,5.928449523169547,5.417163066798821,6.4397359795402735,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p95,p95,fcfs,DistServe,3.0,5.923177174990997,5.420477255713195,6.425877094268799,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p95,p95,phase,PhaseServe,1.0,2.191495801031124,1.875689888256602,2.5073017138056457,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p95,p95,phase,PhaseServe,1.25,2.2106037779012695,1.8758281741756944,2.5453793816268444,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p95,p95,phase,PhaseServe,1.5,1.8851960571482778,1.8740690771955997,1.896323037100956,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p95,p95,phase,PhaseServe,1.75,1.8289165316382423,1.7856109896674752,1.8722220736090096,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p95,p95,phase,PhaseServe,2.0,1.8464790885336697,1.8188275087159127,1.8741306683514267,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p95,p95,phase,PhaseServe,2.25,1.841648630797863,1.8111379055771977,1.8721593560185283,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p95,p95,phase,PhaseServe,2.5,1.8419901916058736,1.8121691322885456,1.8718112509232017,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p95,p95,phase,PhaseServe,2.75,1.84135851560859,1.8097476817201823,1.872969349496998,s/token,1.0,3.0
+llama13b_longbench4k,LLaMA2-13B + LongBench 4K,tpot,tpot_s_p95,p95,phase,PhaseServe,3.0,1.8430911372415721,1.814527654554695,1.8716546199284496,s/token,1.0,3.0

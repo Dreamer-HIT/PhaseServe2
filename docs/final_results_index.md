@@ -59,6 +59,56 @@ Local figure outputs generated from the Stage 4O/4P data:
 | Plotting script | `scripts/plot_stage4o_stage4p_figures.py` |
 | Local source-data snapshot | `results/stage4o_stage4p_plot_data/` |
 
+Draft main end-to-end latency-window figure:
+
+| Figure | Path |
+|---|---|
+| Main E2E combined latency windows | `results/figures/stage4q_main_e2e_windows/stage4q_main_latency_windows_combined.{png,svg,pdf}` |
+| Main E2E TTFT latency windows | `results/figures/stage4q_main_e2e_windows/stage4q_main_ttft_latency_windows.{png,svg,pdf}` |
+| Main E2E TPOT latency windows | `results/figures/stage4q_main_e2e_windows/stage4q_main_tpot_latency_windows.{png,svg,pdf}` |
+| Main E2E per-seed source CSV | `results/figures/stage4q_main_e2e_windows/stage4q_main_latency_windows_per_seed_source.csv` |
+| Main E2E seed-mean source CSV | `results/figures/stage4q_main_e2e_windows/stage4q_main_latency_windows_summary_source.csv` |
+| Main E2E plotting script | `scripts/plot_stage4q_main_e2e_windows.py` |
+
+Current draft window policy:
+
+| Model/dataset | TTFT window | TPOT window | Metrics |
+|---|---:|---:|---|
+| OPT-13B + ShareGPT | `1.00-2.75` | `1.00-2.75` | TTFT `p50+p90`; TPOT `p90+p95` |
+| LLaMA2-13B + ShareGPT | `1.00-2.25` | `0.75-2.00` | TTFT `p50+p90`; TPOT `p90+p95` |
+| LLaMA2-13B + LongBench 4K | `1.00-3.00` | `1.00-3.00` | TTFT `p50+p90`; TPOT `p90+p95` |
+
+Background motivation and Design mechanism figures:
+
+| Figure | Path |
+|---|---|
+| Pressure propagation motivation + diagnostics | `results/figures/motivation/background_pressure_motivation.{png,svg,pdf}` |
+| Motivation source CSV | `results/figures/motivation/background_pressure_motivation_source.csv` |
+| Motivation plotting script | `scripts/plot_background_pressure_motivation.py` |
+| PhaseServe overview mechanism figure | `results/figures/mechanism/phaseserve_overview_imagegen.png` |
+| Budgeted mechanisms figure | `results/figures/mechanism/phaseserve_budget_mechanisms_imagegen.png` |
+| Superseded Python overview draft | `results/figures/mechanism/phaseserve_overview_best.{png,pdf}` |
+
+Exploratory vLLM SLO baseline:
+
+| Artifact | Path |
+|---|---|
+| vLLM OPT-13B + ShareGPT summary CSV | `results/stage4r_vllm_slo_data/stage4r_vllm_slo_opt13b_sharegpt_20260601_203255/sweep_summary.csv` |
+| Exploratory vLLM SLO figure | `results/figures/stage4r_slo_vllm/stage4r_slo_vllm_opt13b_sharegpt.{png,svg,pdf}` |
+| vLLM SLO source CSV | `results/figures/stage4r_slo_vllm/stage4r_slo_vllm_opt13b_sharegpt_source.csv` |
+| vLLM plotting script | `scripts/plot_stage4r_slo_vllm.py` |
+| Supported use | Protocol/debug evidence and future SLO-scale planning only. |
+| Not supported | Positive PhaseServe-vs-vLLM SLO claim under the current fixed SLO. |
+| Superseded Python mechanism draft | `results/figures/mechanism/phaseserve_budget_mechanisms.{png,svg,pdf}` |
+
+Supported use: motivate runtime pressure propagation in a DistServe-style
+baseline using Stage 4O seed0 + seed1 summaries, and show that instrumented
+hard-pressure counters and budget movement are separate from ordinary queue
+latency. Panels (c) and (f) of the motivation figure are diagnostics, not
+PhaseServe performance comparisons. The active mechanism figures are
+image-generated Design schematics; they support the Design section only and are
+not result figures.
+
 Stage 4P main interpretation:
 
 - Full PhaseServe improves SLO attainment, TTFT p90/p99 and TPOT p90/p99 over
