@@ -25,7 +25,36 @@ PhaseServe 是基于 DistServe 的系统研究项目，目标是在 prefill/deco
 | Main blockers | Stage 4P 消融已完成；Stage 4Q 主端到端延迟候选图已按当前窗口生成，并已生成 related-papers 风格的 combined 主图插入 `paper/PhaseServe.tex`。新版 `PhaseServe Design`、Abstract、Introduction 与 Background 已改为 PBC/BPS/KAS pressure-budgeted 叙事；Design 现包含 PBC 和 BPS/KAS 两个 algorithm blocks、typed pressure-to-budget mapping table，并已用 image-generated 机制图替换 TeX 文本占位。Evaluation、Related Work、Conclusion 已删除旧 OPT-6.7B/66B、HumanEval、vLLM baseline、MLFQ/proactive-KV 叙事，改为 Stage 4O/4P 证据边界；Component Ablation 正文已加入线性轴 1x3 折线图，并保留 heatmap 作为 delta summary。服务器停租前备份审计已完成，当前远程实现已镜像到 `remote_distserve/`，当前图和图源已在本地。剩余 blocker 是独立审稿式复查、SLO 单图策略和最终全论文 claim-evidence audit。 |
 | Authoritative result index | `docs/final_results_index.md` |
 | Latest experiment | Stage 4P targeted ablation root: `/root/data/phase_scheduler_results/stage4p_targeted_ablation_20260601_101528/opt13b_sharegpt_ablation`; merged Stage 4O+4P summary: `/root/data/phase_scheduler_results/stage4p_targeted_ablation_20260601_101528/opt13b_sharegpt_ablation/stage4p_merged_ablation.md`. Stage 4O E2E root: `/root/data/phase_scheduler_results/stage4o_e2e_full_matrix_20260531_234957`. Stage 4R vLLM OPT-13B + ShareGPT exploratory root: `/root/data/phase_scheduler_results/stage4r_vllm_slo_opt13b_sharegpt_20260601_203255`; local summary copied, but not paper-safe as a positive claim under current fixed SLO. |
-| Last AGENTS.md update | 2026-06-01 21:50 CST: after subagent review, added a linear-axis 1x3 Stage 4P ablation line figure to the paper正文 and kept the heatmap as a delta summary; no log axis is used in the new正文 ablation curve. |
+| Last AGENTS.md update | 2026-06-01 22:05 CST: added explicit latest-vs-old result hierarchy and new-server recovery steps for remote server shutdown; latest paper evidence remains Stage 4O + Stage 4P, with Stage 4R vLLM marked exploratory only. |
+
+## 实验结果分层与可丢弃边界
+
+下次接手时先按这个表判断结果新旧；不要从远端目录名自行推断。
+
+| Status | Result / Artifact | Use |
+|---|---|---|
+| Latest paper evidence | Stage 4O E2E root `/root/data/phase_scheduler_results/stage4o_e2e_full_matrix_20260531_234957` | 当前端到端主结果来源；覆盖 OPT-13B + ShareGPT、LLaMA2-13B + ShareGPT、LLaMA2-13B + LongBench 4K，seed0+seed1，`240/240`。 |
+| Latest paper evidence | Stage 4P targeted ablation root `/root/data/phase_scheduler_results/stage4p_targeted_ablation_20260601_101528/opt13b_sharegpt_ablation` | 当前最终消融来源；`w/o PBC/BPS/KAS`，`48/48`，与 Stage 4O 合并后 OPT 消融 `80/80`。 |
+| Current paper figures | `results/figures/stage4q_main_e2e_windows/` | 当前正文主端到端延迟候选图；来自 Stage 4O summary snapshot。 |
+| Current paper figures | `results/figures/stage4o_stage4p/stage4p_ablation_main_curves.*` and `stage4p_ablation_improvement_heatmap.*` | 当前正文消融图：线性轴 1x3 折线图 + heatmap delta summary。 |
+| Current paper figures | `results/figures/motivation/` and `results/figures/mechanism/` | 当前 Background/Motivation 和 Design 机制图。 |
+| Local source snapshot | `results/stage4o_stage4p_plot_data/` | Stage 4O/4P 轻量 CSV 摘要快照；可用来重画当前论文图。 |
+| Exploratory only | Stage 4R vLLM OPT-13B + ShareGPT root `/root/data/phase_scheduler_results/stage4r_vllm_slo_opt13b_sharegpt_20260601_203255` and local `results/stage4r_vllm_slo_data/` | 只用于 SLO/vLLM protocol debug；当前固定 SLO 下不是 PhaseServe-vs-vLLM 正向 claim。 |
+| Sanity / historical | Stage 4L/4M/4N roots and docs | 只用于追溯窗口选择、seed sanity check 或调参过程；不作为最终论文主结果。 |
+| Mechanism historical | Stage 4C synthetic mixed-regime ablation | 可辅助解释 PBC/BPS/KAS 机制，但不是最终端到端或最终消融。 |
+| Disposable old data | `w0*`, `w1*`, `w2*`, early 7B, failed tuning, `latest_*`, old raw JSONL/server logs/model caches | 服务器停租可丢弃；不要在论文中引用。 |
+
+## 新服务器恢复步骤
+
+如果当前远端服务器已经关闭，按以下步骤恢复到当前阶段：
+
+1. 克隆 GitHub 分支 `codex/repo-cleanup-stage4l`，或从本地 `backups/phaseserve2_5c09a48_20260601.bundle` 恢复。
+2. 先读 `AGENTS.md`、`docs/current_progress.md`、`docs/final_results_index.md`、`docs/claim_evidence_audit.md`、`docs/server_retirement_backup.md`。
+3. 在新服务器的数据盘创建 DistServe checkout，然后用本仓库 `remote_distserve/` 覆盖/同步当前 PhaseServe 修改版实现、benchmark harness 和脚本。
+4. 模型、datasets、HF cache、result roots 全部放新服务器数据盘；不要放系统盘。
+5. 当前论文图不需要重跑 raw 实验即可查看和编译，因为轻量 summary 和图源 CSV 已在本地仓库。只有要补新 SLO/vLLM 或新 workload 时才重新跑远端实验。
+6. 恢复后先运行 `make -C paper view`，再决定是否继续 Stage 5 的独立审稿、SLO 单图策略和 claim-evidence audit。
+7. 不要把 SSH 私钥、密码、token、模型文件、raw logs、JSONL traces 或大型缓存提交到仓库。
 
 ## 重要文档索引
 
