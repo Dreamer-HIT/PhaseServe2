@@ -54,6 +54,7 @@ Local figure outputs generated from the Stage 4O/4P data:
 | Figure | Path |
 |---|---|
 | Complete end-to-end full matrix | `results/figures/stage4o_stage4p/stage4o_end_to_end_full_matrix.{png,svg,pdf}` |
+| Targeted ablation main curves | `results/figures/stage4o_stage4p/stage4p_ablation_main_curves.{png,svg,pdf}` |
 | Targeted ablation raw curves | `results/figures/stage4o_stage4p/stage4p_ablation_raw_curves.{png,svg,pdf}` |
 | Targeted ablation improvement heatmap | `results/figures/stage4o_stage4p/stage4p_ablation_improvement_heatmap.{png,svg,pdf}` |
 | Plotting script | `scripts/plot_stage4o_stage4p_figures.py` |

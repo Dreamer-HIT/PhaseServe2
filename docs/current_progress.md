@@ -153,6 +153,8 @@ The current high-level evidence is:
    per-GPU `0.75-2.5 req/s/GPU`; DistServe and Full PhaseServe are reused from
    Stage 4O E2E for the final merged five-line component analysis. Coverage is
    `48/48` for the targeted ablation and `80/80` after merging with Stage 4O.
+   The paper now uses a linear-axis 1x3 main ablation curve figure
+   (`SLO`, `TTFT p90`, `TPOT p90`) plus a separate heatmap delta summary.
 
 3. **LLaMA2-13B + ShareGPT, seed0/seed1**
    PhaseServe improves TTFT broadly on per-GPU `1-5` points. Seed1 also improves

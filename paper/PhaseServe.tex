@@ -437,12 +437,19 @@ LLaMA2-13B + LongBench 4K & 1.00--3.00 & 42.9--63.5\% & 27.5--42.8\% & 66.3--68.
 
 \begin{figure*}[t]
 \centering
-\includegraphics[width=\textwidth]{../results/figures/stage4o_stage4p/stage4p_ablation_improvement_heatmap.pdf}
-\caption{Targeted OPT-13B + ShareGPT component ablation in the same pressure window as the main OPT end-to-end result. Each cell reports the improvement of full PhaseServe over the ablated variant, averaged over two seeds. Positive latency values mean full PhaseServe is lower; positive SLO values are percentage-point gains. TPOT p99 is shown as a tradeoff-sensitive secondary metric rather than the main ablation claim.}
-\label{fig:stage4p-ablation}
+\includegraphics[width=\textwidth]{../results/figures/stage4o_stage4p/stage4p_ablation_main_curves.pdf}
+\caption{Targeted OPT-13B + ShareGPT component ablation under the same pressure window as the main OPT end-to-end result. Each curve uses matched request traces and reports the mean over two seeds. Removing PBC, BPS, or KAS weakens, respectively, coordinated pressure ownership, budgeted prefill admission, or KV-feasible decode active-set selection; the resulting variants separate from full PhaseServe as load increases.}
+\label{fig:stage4p-ablation-lines}
 \end{figure*}
 
-Figure~\ref{fig:stage4p-ablation} evaluates whether PBC, BPS, and KAS are jointly needed. The ablation uses OPT-13B + ShareGPT, the same seed0/seed1 request traces as the main OPT experiment, and per-GPU rates from 0.75 to 2.50 req/s/GPU. The full PhaseServe configuration improves SLO attainment, TTFT p90, and TPOT p90 over every component ablation at every measured rate in this window.
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{../results/figures/stage4o_stage4p/stage4p_ablation_improvement_heatmap.pdf}
+\caption{Delta summary for the targeted component ablation. Each cell reports the improvement of full PhaseServe over the ablated variant, averaged over two seeds. Positive latency values mean full PhaseServe is lower; positive SLO values are percentage-point gains. TPOT p99 is shown as a tradeoff-sensitive secondary metric rather than the main ablation claim.}
+\label{fig:stage4p-ablation-delta}
+\end{figure*}
+
+Figure~\ref{fig:stage4p-ablation-lines} evaluates whether PBC, BPS, and KAS are jointly needed. The ablation uses OPT-13B + ShareGPT, the same seed0/seed1 request traces as the main OPT experiment, and per-GPU rates from 0.75 to 2.50 req/s/GPU. The full PhaseServe configuration improves SLO attainment, TTFT p90, and TPOT p90 over every component ablation at every measured rate in this window. Figure~\ref{fig:stage4p-ablation-delta} summarizes the corresponding full-versus-ablation deltas.
 
 Removing PBC weakens the coordinated pressure response. Full PhaseServe improves SLO attainment over the no-PBC variant at all rates and improves both TTFT p90 and TPOT p90 throughout the window. This supports the role of PBC as more than a binary admission rule: it decides which action space should be tightened and which executor owns the response.
 

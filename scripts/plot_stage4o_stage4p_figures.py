@@ -242,6 +242,62 @@ def plot_ablation_lines(data_root: Path, out_dir: Path) -> pd.DataFrame:
     return df
 
 
+def plot_ablation_main_lines(ablation: pd.DataFrame, out_dir: Path) -> None:
+    fig, axes = plt.subplots(1, 3, figsize=(7.2, 2.35), constrained_layout=True)
+    panels = [
+        ("slo_attainment_completed_mean", "SLO attainment (%)", "a"),
+        ("ttft_p90_mean", "TTFT p90 (s)", "b"),
+        ("tpot_p90_mean", "TPOT p90 (s/token)", "c"),
+    ]
+    line_styles = {
+        "fcfs": (1.35, "-", 0.95),
+        "phase": (1.9, "-", 1.0),
+        "bps_kas": (1.25, "--", 0.95),
+        "kas_pbc": (1.25, "--", 0.95),
+        "bps_pbc": (1.25, "--", 0.95),
+    }
+    markers = {
+        "fcfs": "o",
+        "phase": "o",
+        "bps_kas": "s",
+        "kas_pbc": "^",
+        "bps_pbc": "D",
+    }
+    for ax, (metric, ylabel, panel) in zip(axes, panels):
+        add_panel_label(ax, panel)
+        ax.grid(True, axis="y", color="#d9dee7", linewidth=0.5, alpha=0.7)
+        for policy in ["fcfs", "phase", "bps_kas", "kas_pbc", "bps_pbc"]:
+            s = ablation[ablation["policy"] == policy].sort_values("per_gpu_rate")
+            y = s[metric] * 100 if metric.startswith("slo_") else s[metric]
+            width, linestyle, alpha = line_styles[policy]
+            ax.plot(
+                s["per_gpu_rate"],
+                y,
+                marker=markers[policy],
+                markersize=2.7 if policy != "phase" else 3.2,
+                linewidth=width,
+                linestyle=linestyle,
+                color=COLORS[policy],
+                alpha=alpha,
+                label=POLICY_LABELS[policy],
+            )
+        ax.set_xlabel("Per-GPU rate (req/s)")
+        ax.set_ylabel(ylabel)
+        ax.set_xticks([0.75, 1, 1.5, 2, 2.5])
+        ax.set_xlim(0.68, 2.57)
+        if metric.startswith("slo_"):
+            ax.set_ylim(0, 100)
+        else:
+            ymax = max(
+                ablation[metric].max() * 1.08,
+                1.0 if metric.startswith("tpot_") else 5.0,
+            )
+            ax.set_ylim(0, ymax)
+    axes[0].legend(ncol=2, loc="best", handlelength=2.2)
+    save_all(fig, out_dir / "stage4p_ablation_main_curves")
+    plt.close(fig)
+
+
 def plot_ablation_heatmap(data_root: Path, out_dir: Path) -> None:
     comp_path = (
         data_root
@@ -316,6 +372,7 @@ def main() -> None:
     plot_e2e(e2e, args.out_dir)
     ablation = plot_ablation_lines(args.data_root, args.out_dir)
     ablation.to_csv(args.out_dir / "stage4p_ablation_seed_mean_source.csv", index=False)
+    plot_ablation_main_lines(ablation, args.out_dir)
     plot_ablation_heatmap(args.data_root, args.out_dir)
     print(f"Wrote figures to {args.out_dir.resolve()}")
 
